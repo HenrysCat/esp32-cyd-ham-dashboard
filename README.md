@@ -2,6 +2,8 @@
 
 A HamClock-inspired ham radio dashboard for the ESP32-2432S028R Cheap Yellow Display.
 
+**[Flash it in your browser with the Web Flasher](https://henryscat.github.io/)**
+
 It provides a touch-controlled 320x240 landscape dashboard with UTC/local time, HamQSL propagation data, a greyline map, DX spots, Wi-Fi setup, and a local web settings page.
 
 ![ESP32 CYD Ham Dashboard showing the clock, HF propagation, greyline, and DX spots pages](assets/esp32-cyd-ham-dashboard.jpg)
