@@ -9,6 +9,8 @@ struct PropagationData {
   String kIndex;
   String sunspots;
   String xray;
+  String solarWind;
+  String bz;
   String geomag;
   String signalNoise;
   String aurora;

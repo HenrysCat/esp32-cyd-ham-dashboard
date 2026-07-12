@@ -202,6 +202,7 @@ Displays:
 - K index
 - X-Ray
 - Sunspots
+- Solar wind speed (SW) and magnetic-field Bz
 - Geomag
 - Noise
 - Aurora

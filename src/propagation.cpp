@@ -209,6 +209,21 @@ String getJsonField(const String& json, const char* key) {
   return value;
 }
 
+String firstJsonField(const String& json, const char* firstKey, const char* secondKey = nullptr,
+                      const char* thirdKey = nullptr) {
+  String value = getJsonField(json, firstKey);
+  if (value.length() > 0 || secondKey == nullptr) {
+    return value;
+  }
+
+  value = getJsonField(json, secondKey);
+  if (value.length() > 0 || thirdKey == nullptr) {
+    return value;
+  }
+
+  return getJsonField(json, thirdKey);
+}
+
 String getJsonCondition(const String& json, const char* bandName) {
   const int condStart = json.indexOf("\"conditions\"");
   if (condStart < 0) {
@@ -239,6 +254,8 @@ bool parseHamQslXml(String& xml, PropagationData& parsed) {
   parsed.kIndex = valueOrDash(getXmlTagValue(xml, "kindex"));
   parsed.sunspots = valueOrDash(getXmlTagValue(xml, "sunspots"));
   parsed.xray = valueOrDash(getXmlTagValue(xml, "xray"));
+  parsed.solarWind = valueOrDash(getXmlTagValue(xml, "solarwind"));
+  parsed.bz = valueOrDash(getXmlTagValue(xml, "magneticfield"));
   parsed.geomag = valueOrDash(getXmlTagValue(xml, "geomagfield"));
   parsed.signalNoise = valueOrDash(getXmlTagValue(xml, "signalnoise"));
   parsed.aurora = valueOrDash(getXmlTagValue(xml, "aurora"));
@@ -284,6 +301,8 @@ bool parsePropagationJson(String& json, PropagationData& parsed) {
   parsed.kIndex = valueOrDash(getJsonField(json, "k_index"));
   parsed.sunspots = valueOrDash(getJsonField(json, "sunspots"));
   parsed.xray = valueOrDash(getJsonField(json, "xray"));
+  parsed.solarWind = valueOrDash(firstJsonField(json, "solar_wind", "solar_wind_speed", "sw"));
+  parsed.bz = valueOrDash(firstJsonField(json, "bz", "bz_gsm"));
   parsed.geomag = valueOrDash(getJsonField(json, "geomag"));
   parsed.signalNoise = valueOrDash(getJsonField(json, "signal_noise"));
   parsed.aurora = valueOrDash(getJsonField(json, "aurora"));
@@ -360,6 +379,8 @@ void setEmptyPropagationFields(const String& status) {
   g_data.kIndex = "--";
   g_data.sunspots = "--";
   g_data.xray = "--";
+  g_data.solarWind = "--";
+  g_data.bz = "--";
   g_data.geomag = "--";
   g_data.signalNoise = "--";
   g_data.aurora = "--";
