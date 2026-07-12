@@ -69,6 +69,56 @@ String valueOrDash(String value) {
   return value.length() > 0 ? value : String("--");
 }
 
+String providerNameFromAddress(String address) {
+  address.trim();
+  const int schemeEnd = address.indexOf("://");
+  if (schemeEnd >= 0) {
+    address = address.substring(schemeEnd + 3);
+  }
+
+  const int pathStart = address.indexOf('/');
+  if (pathStart >= 0) {
+    address = address.substring(0, pathStart);
+  }
+  const int credentialsEnd = address.lastIndexOf('@');
+  if (credentialsEnd >= 0) {
+    address = address.substring(credentialsEnd + 1);
+  }
+  const int portStart = address.indexOf(':');
+  if (portStart >= 0) {
+    address = address.substring(0, portStart);
+  }
+
+  address.toLowerCase();
+  const char* prefixes[] = {"www.", "web.", "cluster.", "telnet.", "dxcluster."};
+  bool removedPrefix = true;
+  while (removedPrefix) {
+    removedPrefix = false;
+    for (const char* prefix : prefixes) {
+      if (address.startsWith(prefix)) {
+        address = address.substring(strlen(prefix));
+        removedPrefix = true;
+        break;
+      }
+    }
+  }
+
+  const int domainEnd = address.indexOf('.');
+  if (domainEnd > 0) {
+    address = address.substring(0, domainEnd);
+  }
+  address.toUpperCase();
+  return valueOrDash(address);
+}
+
+String jsonProviderName() {
+  return providerNameFromAddress(getDxSpotsUrl());
+}
+
+String telnetProviderName() {
+  return providerNameFromAddress(getSettings().dxTelnetHost);
+}
+
 String isoTimeToDisplay(String iso) {
   iso.trim();
   if (iso.length() >= 16 && iso[10] == 'T') {
@@ -281,6 +331,7 @@ bool isDuplicateDxSpot(const DxSpot& spot) {
 
 void setTelnetStatus(const String& status) {
   g_data.status = status;
+  g_data.provider = telnetProviderName();
   if (g_telnetHasCurrentSpots) {
     g_data.source = "Telnet";
   } else if (g_data.hasData) {
@@ -357,6 +408,7 @@ bool addDxSpotToList(const DxSpot& spot) {
   }
   g_data.hasData = true;
   g_data.source = "Telnet";
+  g_data.provider = telnetProviderName();
   g_data.status = "Reading";
   g_data.updated = currentUtcDisplay(spot.time);
   Serial.print("DX Telnet spot: ");
@@ -536,9 +588,13 @@ bool loopDxTelnet() {
   return changed;
 }
 
-void markDxFailure(const String& status, const String& attemptedSource) {
+void markDxFailure(const String& status, const String& attemptedSource,
+                   const String& attemptedProvider) {
   g_data.status = status;
   g_data.source = g_data.hasData ? String("Last good") : attemptedSource;
+  if (!g_data.hasData) {
+    g_data.provider = attemptedProvider;
+  }
 }
 
 bool readDxArrayPrefix(Stream& stream, String& arrayJson) {
@@ -669,6 +725,7 @@ bool parseIz3mezDxJson(Stream& stream, DxSpotsData& parsed) {
 
   parsed.updated = valueOrDash(parsed.updated);
   parsed.source = "JSON";
+  parsed.provider = jsonProviderName();
   parsed.hasData = parsed.spotCount > 0;
   parsed.status = "OK";
   Serial.println("DX JSON parse result: OK");
@@ -683,7 +740,7 @@ bool fetchDxSpots() {
   const String url = getDxSpotsUrl();
   if (url.length() == 0) {
     Serial.println("DX fetch skipped: DX URL not set");
-    markDxFailure("DX URL not set", "JSON");
+    markDxFailure("DX URL not set", "JSON", jsonProviderName());
     return false;
   }
 
@@ -696,7 +753,7 @@ bool fetchDxSpots() {
   WiFiClientSecure secureClient;
   if (!beginHttp(url, http, plainClient, secureClient)) {
     Serial.println("DX fetch failure reason: http.begin");
-    markDxFailure("Fetch failed", "JSON");
+    markDxFailure("Fetch failed", "JSON", jsonProviderName());
     return false;
   }
 
@@ -710,7 +767,7 @@ bool fetchDxSpots() {
   if (httpCode != HTTP_CODE_OK) {
     http.end();
     Serial.println("DX fetch failure reason: HTTP status");
-    markDxFailure("Fetch failed", "JSON");
+    markDxFailure("Fetch failed", "JSON", jsonProviderName());
     return false;
   }
 
@@ -719,7 +776,7 @@ bool fetchDxSpots() {
   http.end();
 
   if (!parsedOk) {
-    markDxFailure("Parse failed", "JSON");
+    markDxFailure("Parse failed", "JSON", jsonProviderName());
     return false;
   }
 
@@ -735,6 +792,7 @@ void dxSpotsBegin() {
   g_data.status = "Waiting";
   g_data.updated = "--";
   g_data.source = "--";
+  g_data.provider = "--";
   g_telnetLineBuffer.reserve(kMaxTelnetLineChars);
   g_lastSourceMode = 0xFF;
   g_autoUsingTelnet = false;
@@ -775,7 +833,9 @@ bool refreshDxSpotsIfNeeded(bool wifiConnected) {
     g_telnetHasCurrentSpots = false;
     g_lastAttemptMs = nowMs - intervalMs + 5000UL;
     g_refreshRequested = false;
-    markDxFailure("WiFi offline", mode == kDxSourceTelnet ? String("Telnet") : String("JSON"));
+    const bool telnetOnly = mode == kDxSourceTelnet;
+    markDxFailure("WiFi offline", telnetOnly ? String("Telnet") : String("JSON"),
+                  telnetOnly ? telnetProviderName() : jsonProviderName());
     return true;
   }
 

@@ -524,7 +524,8 @@ void drawPropagationPage(const ClockSnapshot& snapshot) {
   drawLeftField(g_lastPropSunspots, "Sunspots " + propagation.sunspots +
                 "   Geomag " + propagation.geomag, 8, 54, 2, kText, 304);
   drawLeftField(g_lastPropNoise, "Noise " + propagation.signalNoise +
-                "   Aurora " + propagation.aurora, 8, 72, 2, kText, 304);
+                "   Aurora " + propagation.aurora + "   SW " + propagation.solarWind +
+                "   Bz " + propagation.bz, 8, 72, 2, kText, 304);
   tft.drawFastHLine(4, 88, tft.width() - 8, kPanel);
 
   drawConditionRow(g_lastPropBandA, "80m-40m", propagation.band8040Day, propagation.band8040Night, 112);
@@ -601,7 +602,7 @@ void drawDxPage(const ClockSnapshot& snapshot) {
   }
 
   drawLeftField(g_lastDxUpdated, "Updated: " + dx.updated, 8, 186, 2, kMuted, 144);
-  drawLeftField(g_lastDxSource, "Source: " + dx.source, 158, 186, 2,
+  drawLeftField(g_lastDxSource, "Source: " + dx.provider, 158, 186, 2,
                 dx.source == "Last good" ? kWarn : kAccent, 158);
   drawLeftField(g_lastDxStatus, "Status: " + dx.status, 8, 204, 1,
                 dx.status == "OK" || dx.status == "Connected" || dx.status == "Reading"

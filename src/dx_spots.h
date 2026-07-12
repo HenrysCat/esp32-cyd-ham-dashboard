@@ -21,6 +21,7 @@ struct DxSpotsData {
   String status;
   String updated;
   String source;
+  String provider;
   uint8_t spotCount;
   DxSpot spots[kMaxDxSpots];
 };
