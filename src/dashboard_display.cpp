@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include "dx_spots.h"
@@ -239,6 +240,94 @@ uint16_t conditionColor(const String& condition) {
     return TFT_BLUE;
   }
   return kMuted;
+}
+
+bool numericReading(const String& value, float& result) {
+  const char* text = value.c_str();
+  char* end = nullptr;
+  result = strtof(text, &end);
+  return end != text;
+}
+
+uint16_t readingColor(const String& reading, const char* parameter) {
+  float value = 0.0f;
+  if (String(parameter) == "X-Ray") {
+    String level = reading;
+    level.trim();
+    level.toUpperCase();
+    if (level.startsWith("A") || level.startsWith("B")) return TFT_GREEN;
+    if (level.startsWith("C")) return TFT_YELLOW;
+    if (level.startsWith("M") || level.startsWith("X")) return TFT_RED;
+    return kMuted;
+  }
+
+  if (!numericReading(reading, value)) return kMuted;
+
+  if (String(parameter) == "SFI") {
+    return value > 120.0f ? TFT_GREEN : value >= 90.0f ? TFT_YELLOW : TFT_RED;
+  }
+  if (String(parameter) == "SN") {
+    return value > 80.0f ? TFT_GREEN : value >= 40.0f ? TFT_YELLOW : TFT_RED;
+  }
+  if (String(parameter) == "K") {
+    return value <= 2.0f ? TFT_GREEN : value <= 3.0f ? TFT_YELLOW : TFT_RED;
+  }
+  if (String(parameter) == "A") {
+    return value <= 10.0f ? TFT_GREEN : value <= 20.0f ? TFT_YELLOW : TFT_RED;
+  }
+  if (String(parameter) == "SW") {
+    return value < 450.0f ? TFT_GREEN : value <= 600.0f ? TFT_YELLOW : TFT_RED;
+  }
+  if (String(parameter) == "Bz") {
+    return value > 0.0f ? TFT_GREEN : value >= -5.0f ? TFT_YELLOW : TFT_RED;
+  }
+  return kMuted;
+}
+
+void drawReading(int16_t& x, int16_t y, const String& label, const String& value,
+                 uint16_t color) {
+  drawLeft(label, x, y, 2, kText);
+  x += tft.textWidth(label, 2);
+  drawLeft(value, x, y, 2, color);
+  x += tft.textWidth(value, 2);
+}
+
+void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastNoise,
+                        const PropagationData& propagation) {
+  const String sfiXray = "SFI " + propagation.sfi + "   A " + propagation.aIndex +
+                         "   K " + propagation.kIndex + "   X-Ray " + propagation.xray;
+  if (sfiXray != lastSfiXray) {
+    tft.fillRect(8, 34, 304, tft.fontHeight(2) + 4, kBg);
+    int16_t x = 8;
+    drawReading(x, 36, "SFI ", propagation.sfi, readingColor(propagation.sfi, "SFI"));
+    drawReading(x, 36, "   A ", propagation.aIndex, readingColor(propagation.aIndex, "A"));
+    drawReading(x, 36, "   K ", propagation.kIndex, readingColor(propagation.kIndex, "K"));
+    drawReading(x, 36, "   X-Ray ", propagation.xray, readingColor(propagation.xray, "X-Ray"));
+    lastSfiXray = sfiXray;
+  }
+
+  const String sunspots = "Sunspots " + propagation.sunspots + "   Geomag " + propagation.geomag;
+  if (sunspots != lastSunspots) {
+    tft.fillRect(8, 52, 304, tft.fontHeight(2) + 4, kBg);
+    int16_t x = 8;
+    drawReading(x, 54, "Sunspots ", propagation.sunspots,
+                readingColor(propagation.sunspots, "SN"));
+    drawReading(x, 54, "   Geomag ", propagation.geomag, kText);
+    lastSunspots = sunspots;
+  }
+
+  const String noise = "Noise " + propagation.signalNoise + "   Aurora " + propagation.aurora +
+                       "   SW " + propagation.solarWind + "   Bz " + propagation.bz;
+  if (noise != lastNoise) {
+    tft.fillRect(8, 70, 304, tft.fontHeight(2) + 4, kBg);
+    int16_t x = 8;
+    drawReading(x, 72, "Noise ", propagation.signalNoise, kText);
+    drawReading(x, 72, "   Aurora ", propagation.aurora, kText);
+    drawReading(x, 72, "   SW ", propagation.solarWind,
+                readingColor(propagation.solarWind, "SW"));
+    drawReading(x, 72, "   Bz ", propagation.bz, readingColor(propagation.bz, "Bz"));
+    lastNoise = noise;
+  }
 }
 
 void drawConditionValue(const String& value, int16_t center, int16_t y) {
@@ -518,14 +607,7 @@ void drawPropagationPage(const ClockSnapshot& snapshot) {
     drawCenteredAt("Night", 266, 92, 2, kMuted);
   }
 
-  drawLeftField(g_lastPropSfiXray, "SFI " + propagation.sfi + "   A " + propagation.aIndex +
-                "   K " + propagation.kIndex + "   X-Ray " + propagation.xray, 8, 36, 2,
-                kText, 304);
-  drawLeftField(g_lastPropSunspots, "Sunspots " + propagation.sunspots +
-                "   Geomag " + propagation.geomag, 8, 54, 2, kText, 304);
-  drawLeftField(g_lastPropNoise, "Noise " + propagation.signalNoise +
-                "   Aurora " + propagation.aurora + "   SW " + propagation.solarWind +
-                "   Bz " + propagation.bz, 8, 72, 2, kText, 304);
+  drawTopReadingRows(g_lastPropSfiXray, g_lastPropSunspots, g_lastPropNoise, propagation);
   tft.drawFastHLine(4, 88, tft.width() - 8, kPanel);
 
   drawConditionRow(g_lastPropBandA, "80m-40m", propagation.band8040Day, propagation.band8040Night, 112);
