@@ -137,6 +137,7 @@ void settingsBegin() {
   currentSettings.dxRefreshMinutes = preferences.getUShort("dxmins", kDefaultDxRefreshMinutes);
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
+  currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
   normalizeSettings(currentSettings);
 }
 
@@ -163,6 +164,7 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("propmins", currentSettings.propagationRefreshMinutes);
   preferences.putUShort("dxmins", currentSettings.dxRefreshMinutes);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
+  preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
 }
 
 bool hasWifiCredentials() {

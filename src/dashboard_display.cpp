@@ -45,13 +45,16 @@ constexpr uint16_t kBg = TFT_BLACK;
 constexpr uint16_t kPanel = TFT_DARKGREY;
 constexpr uint16_t kText = TFT_WHITE;
 constexpr uint16_t kMuted = TFT_LIGHTGREY;
-constexpr uint16_t kAccent = TFT_CYAN;
+constexpr uint16_t kAccent = TFT_YELLOW;
 constexpr uint16_t kWarn = TFT_ORANGE;
 
 constexpr int16_t kMapX = 10;
-constexpr int16_t kMapY = 28;
+constexpr int16_t kMapY = 4;
 constexpr int16_t kMapW = 300;
-constexpr int16_t kMapH = 108;
+constexpr int16_t kMapH = 150;
+constexpr uint8_t kIli9341Madctl = 0x36;
+constexpr uint8_t kIli9341MadctlRotation0 = 0x40;
+constexpr uint8_t kIli9341MadctlBgr = 0x08;
 
 DashboardPage g_currentPage = kPageClock;
 bool g_pageDirty = true;
@@ -234,10 +237,10 @@ uint16_t conditionColor(const String& condition) {
     return TFT_GREEN;
   }
   if (condition.equalsIgnoreCase("Fair")) {
-    return TFT_CYAN;
+    return TFT_YELLOW;
   }
   if (condition.equalsIgnoreCase("Poor")) {
-    return TFT_BLUE;
+    return TFT_RED;
   }
   return kMuted;
 }
@@ -281,6 +284,30 @@ uint16_t readingColor(const String& reading, const char* parameter) {
   if (String(parameter) == "Bz") {
     return value > 0.0f ? TFT_GREEN : value >= -5.0f ? TFT_YELLOW : TFT_RED;
   }
+  if (String(parameter) == "Aurora") {
+    return value <= 10.0f ? TFT_GREEN : value <= 30.0f ? TFT_YELLOW : TFT_RED;
+  }
+  return kMuted;
+}
+
+uint16_t qualitativeReadingColor(const String& reading, const char* parameter) {
+  String level = reading;
+  level.trim();
+  level.toUpperCase();
+
+  if (String(parameter) == "Geomag") {
+    if (level.indexOf("QUIET") >= 0 || level == "NORMAL") return TFT_GREEN;
+    if (level.indexOf("UNSETTLED") >= 0) return TFT_YELLOW;
+    if (level.indexOf("ACTIVE") >= 0 || level.indexOf("STORM") >= 0) return TFT_RED;
+  }
+  if (String(parameter) == "Noise") {
+    if (level.indexOf("LOW") >= 0 || level == "NORMAL") return TFT_GREEN;
+    if (level.indexOf("MODERATE") >= 0 || level.indexOf("MEDIUM") >= 0) return TFT_YELLOW;
+    if (level.indexOf("HIGH") >= 0) return TFT_RED;
+  }
+  if (String(parameter) == "Aurora") {
+    return readingColor(reading, "Aurora");
+  }
   return kMuted;
 }
 
@@ -312,7 +339,8 @@ void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastN
     int16_t x = 8;
     drawReading(x, 54, "Sunspots ", propagation.sunspots,
                 readingColor(propagation.sunspots, "SN"));
-    drawReading(x, 54, "   Geomag ", propagation.geomag, kText);
+    drawReading(x, 54, "   Geomag ", propagation.geomag,
+                qualitativeReadingColor(propagation.geomag, "Geomag"));
     lastSunspots = sunspots;
   }
 
@@ -321,8 +349,10 @@ void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastN
   if (noise != lastNoise) {
     tft.fillRect(8, 70, 304, tft.fontHeight(2) + 4, kBg);
     int16_t x = 8;
-    drawReading(x, 72, "Noise ", propagation.signalNoise, kText);
-    drawReading(x, 72, "   Aurora ", propagation.aurora, kText);
+    drawReading(x, 72, "Noise ", propagation.signalNoise,
+                qualitativeReadingColor(propagation.signalNoise, "Noise"));
+    drawReading(x, 72, "   Aurora ", propagation.aurora,
+                qualitativeReadingColor(propagation.aurora, "Aurora"));
     drawReading(x, 72, "   SW ", propagation.solarWind,
                 readingColor(propagation.solarWind, "SW"));
     drawReading(x, 72, "   Bz ", propagation.bz, readingColor(propagation.bz, "Bz"));
@@ -375,27 +405,9 @@ void latLonToMapXY(double latitude, double longitude, int16_t& x, int16_t& y) {
 }
 
 void drawMapBackground() {
+  mapSprite.setSwapBytes(true);
   mapSprite.pushImage(0, 0, kGreylineMapWidth, kGreylineMapHeight,
                       const_cast<uint16_t*>(kGreylineMapRgb565));
-}
-
-void drawMapGrid() {
-  const uint16_t grid = mapSprite.color565(18, 46, 70);
-  for (int lon = -120; lon <= 120; lon += 60) {
-    int16_t x1, y1;
-    int16_t x2, y2;
-    latLonToMapXY(90.0, lon, x1, y1);
-    latLonToMapXY(-90.0, lon, x2, y2);
-    mapSprite.drawLine(x1, y1, x2, y2, grid);
-  }
-
-  for (int lat = -60; lat <= 60; lat += 30) {
-    int16_t x1, y1;
-    int16_t x2, y2;
-    latLonToMapXY(lat, -180.0, x1, y1);
-    latLonToMapXY(lat, 180.0, x2, y2);
-    mapSprite.drawLine(x1, y1, x2, y2, grid);
-  }
 }
 
 uint16_t darkenRgb565(uint16_t color, uint8_t percent) {
@@ -497,14 +509,12 @@ void drawGreylineMap(const GreylineData& greyline) {
   }
 
   drawMapBackground();
-  drawMapGrid();
   if (greyline.valid) {
     drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
     drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
     drawQthMarker(greyline.latitudeValue, greyline.longitudeValue);
     drawSunMarker(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
   }
-  mapSprite.drawRect(0, 0, kMapW, kMapH, kPanel);
   mapSprite.pushSprite(kMapX, kMapY);
 }
 
@@ -626,7 +636,6 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
 
   if (g_pageDirty) {
     tft.fillScreen(kBg);
-    drawCentered("Greyline", 3, 2, kAccent);
   }
 
   const String mapSignature = greyline.qth + "|" + greyline.latitude + "|" + greyline.longitude +
@@ -636,16 +645,16 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
     drawGreylineMap(greyline);
     g_lastGreyMap = mapSignature;
   }
-  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, 14, 144, 2, kText, 110);
-  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, 126, 144, 2, kText, 184);
-  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), 14, 164, 2, kText, 96);
-  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), 118, 164, 2, kText, 90);
-  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), 218, 164, 2, kMuted, 92);
-  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, 14, 184, 2,
-                greyline.status == "Location invalid" ? kWarn : kText, 142);
+  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, 14, 160, 1, kText, 88);
+  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, 108, 160, 1, kText, 126);
+  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), 14, 178, 1, kText, 76);
+  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), 96, 178, 1, kText, 76);
+  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), 178, 178, 1, kMuted, 82);
+  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, 14, 196, 1,
+                greyline.status == "Location invalid" ? kWarn : kText, 134);
   String greylineLabel = greyline.greyline;
   greylineLabel.replace(" greyline", "");
-  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, 160, 184, 2,
+  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, 154, 196, 1,
                 greyline.greyline == "Not near greyline" ? kMuted : kAccent);
   drawFooter(snapshot);
 }
@@ -832,9 +841,7 @@ void displayBegin() {
   pinMode(kTouchIrq, INPUT);
   touchSpi.begin(kTouchSclk, kTouchMiso, kTouchMosi, kTouchCs);
 
-#ifdef TFT_BL
   applyDisplaySettings();
-#endif
 
   tft.fillScreen(kBg);
   clearPageState();
@@ -854,12 +861,22 @@ void displayUpdate(const ClockSnapshot& snapshot) {
 }
 
 void applyDisplaySettings() {
+  const AppSettings& settings = getSettings();
+
+  // TFT_eSPI's RGB/BGR order is normally fixed at compile time. Set the ILI9341
+  // MADCTL colour-order bit here so differently wired CYD panels can be corrected
+  // from the web settings page without rebuilding firmware.
+  tft.startWrite();
+  tft.writecommand(kIli9341Madctl);
+  tft.writedata(kIli9341MadctlRotation0 |
+                (settings.swapRedBlueChannels ? kIli9341MadctlBgr : 0));
+  tft.endWrite();
+
 #ifdef TFT_BL
   constexpr uint8_t kBacklightChannel = 0;
   constexpr uint32_t kBacklightFrequency = 5000;
   constexpr uint8_t kBacklightResolution = 8;
 
-  const AppSettings& settings = getSettings();
   const uint8_t brightness = constrain(settings.brightnessPercent, static_cast<uint8_t>(5),
                                        static_cast<uint8_t>(100));
   uint8_t duty = map(brightness, 0, 100, 0, 255);
@@ -870,6 +887,9 @@ void applyDisplaySettings() {
   ledcAttachPin(TFT_BL, kBacklightChannel);
   ledcWrite(kBacklightChannel, duty);
 #endif
+
+  clearPageState();
+  g_pageDirty = true;
 }
 
 uint8_t getCurrentDashboardPageNumber() {

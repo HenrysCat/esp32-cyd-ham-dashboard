@@ -24,6 +24,7 @@ struct AppSettings {
   uint16_t propagationRefreshMinutes;
   uint16_t dxRefreshMinutes;
   uint8_t brightnessPercent;
+  bool swapRedBlueChannels;
 };
 
 void settingsBegin();

@@ -252,7 +252,11 @@ String pageHtml(const String& message = "") {
   html += F("'></div></div></div><div class='card'><h2>Display</h2>");
   html += F("<label for='bright'>Backlight brightness percent</label><input id='bright' name='bright' type='number' min='5' max='100' value='");
   html += String(settings.brightnessPercent);
-  html += F("'><small>Screen rotation is fixed in firmware for this CYD landscape setup.</small></div>");
+  html += F("'><label><input name='swaprb' type='checkbox' value='1'");
+  if (settings.swapRedBlueChannels) {
+    html += F(" checked");
+  }
+  html += F(">Swap red/blue display channels</label><small>Enable this only when red appears blue and yellow appears cyan. It is applied immediately and saved for this board.</small></div>");
   html += F("<button type='submit'>Save settings</button></form>");
   html += F("<form method='post' action='/reboot'><button class='danger' type='submit'>Restart device</button></form>");
   html += F("<p><small>This page is intended for trusted LAN use only. No admin password is configured in this project.</small></p>");
@@ -322,6 +326,7 @@ void handleSave() {
       constrain(server.arg("dxmins").toInt(), 1L, 120L));
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
+  settings.swapRedBlueChannels = server.hasArg("swaprb");
   saveSettings(settings);
   applyTimezoneSettings();
   applyDisplaySettings();
