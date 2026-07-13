@@ -8,6 +8,9 @@
 // User_Setup.h, or configure User_Setup_Select.h to include an equivalent file.
 
 #define ILI9341_DRIVER
+// This CYD panel uses RGB channel order; without this, yellow renders as cyan
+// and red as blue (green is unaffected).
+#define TFT_RGB_ORDER TFT_RGB
 
 #define TFT_WIDTH  240
 #define TFT_HEIGHT 320
