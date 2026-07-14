@@ -912,3 +912,14 @@ void applyDisplaySettings() {
 uint8_t getCurrentDashboardPageNumber() {
   return static_cast<uint8_t>(g_currentPage) + 1;
 }
+
+void displayShowMessage(const String& title, const String& subtitle) {
+  tft.fillScreen(kBg);
+  drawCentered(title, 96, 4, kAccent);
+  drawCentered(subtitle, 132, 2, kMuted);
+}
+
+void requestDisplayRedraw() {
+  clearPageState();
+  g_pageDirty = true;
+}

@@ -138,6 +138,7 @@ void settingsBegin() {
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
+  currentSettings.keepHotspotOn = preferences.getBool("apalwayson", false);
   normalizeSettings(currentSettings);
 }
 
@@ -165,8 +166,14 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("dxmins", currentSettings.dxRefreshMinutes);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
+  preferences.putBool("apalwayson", currentSettings.keepHotspotOn);
 }
 
 bool hasWifiCredentials() {
   return currentSettings.wifiSsid.length() > 0;
+}
+
+void factoryResetSettings() {
+  preferences.clear();
+  settingsBegin();
 }

@@ -53,7 +53,8 @@ void connectivityLoop() {
 
 void reconnectWifi() {
   const AppSettings& settings = getSettings();
-  WiFi.mode(WIFI_AP_STA);
+  // Mode is owned by setup_portal (it decides when the setup hotspot is on
+  // or off), so only touch the STA side here and leave the mode alone.
   WiFi.disconnect(false);
   if (settings.wifiSsid.length() == 0) {
     return;

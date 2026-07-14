@@ -17,8 +17,9 @@ It provides a touch-controlled 320x240 landscape dashboard with UTC/local time, 
   - HF Propagation from HamQSL
   - Greyline map with QTH marker, sun marker, terminator, sunrise/sunset, and day/night status
   - DX spots from JSON and/or a persistent Telnet DX Cluster connection
-- Captive portal Wi-Fi setup
+- Captive portal Wi-Fi setup, which automatically switches off a few seconds after the device confirms it has joined your Wi-Fi network (it can be switched back on from the web settings page if you need it again)
 - Local web settings page on the device IP
+- Hold the BOOT button on the back of the board for 5 seconds to factory reset all settings
 - Optional mDNS address: `http://cyd-ham.local/`
 - NTP time sync
 - Configurable callsign, locator, timezone, data URLs, refresh intervals, and brightness
@@ -52,6 +53,12 @@ The included TFT_eSPI setup uses this common CYD wiring:
 | Touch IRQ | 36 |
 
 Some CYD variants use different pins. If the display is blank, white, mirrored, or touch is wrong, check your board revision and adjust `include/User_Setup.h` and the touch constants in `src/dashboard_display.cpp`.
+
+### Setup hotspot and factory reset
+
+On first boot (or whenever no Wi-Fi is configured), the device broadcasts a `CYD-HamClock-Setup` access point (password `hamclock`) so you can join it and open the captive portal to enter your Wi-Fi details. Once the device confirms it has joined your network, the hotspot automatically switches off. To bring it back later — for example to reach the settings page again without your router — check "Keep the setup hotspot switched on" in the Station section of the web settings page.
+
+The board's BOOT button (GPIO0, on the back next to the USB connector) doubles as a factory reset button: hold it down for 5 seconds while the dashboard is running to wipe all saved settings (Wi-Fi credentials, callsign, locator, timezone, data sources, brightness) and reboot to defaults. The screen shows a countdown while the button is held; release early to cancel.
 
 ## Flashing A Release Binary
 
