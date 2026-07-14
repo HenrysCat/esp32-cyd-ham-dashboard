@@ -12,9 +12,10 @@ It provides a touch-controlled 320x240 landscape dashboard with UTC/local time, 
 
 - ESP32-2432S028R / CYD ILI9341 display support
 - XPT2046 touch navigation
-- Four dashboard pages:
+- Five dashboard pages:
   - Clock
   - HF Propagation from HamQSL
+  - VHF Conditions from HamQSL
   - Greyline map with QTH marker, sun marker, terminator, sunrise/sunset, and day/night status
   - DX spots from JSON and/or a persistent Telnet DX Cluster connection
 - Captive portal Wi-Fi setup, which automatically switches off a few seconds after the device confirms it has joined your Wi-Fi network (it can be switched back on from the web settings page if you need it again)
@@ -177,7 +178,7 @@ This web UI is intended for a trusted local network. It does not include authent
 
 - Tap left side: next page
 - Tap right side: previous page
-- Tap centre on HF Propagation page: manual propagation refresh
+- Tap centre on HF Propagation or VHF Conditions page: manual propagation refresh
 - Tap centre on DX Spots page: manual DX refresh
 
 The footer shows Wi-Fi status, NTP status, and current page number.
@@ -219,6 +220,16 @@ Displays:
 - Last update time and status
 
 An optional JSON proxy URL can be configured from the web page.
+
+### VHF Conditions
+
+Same layout and data source as HF Propagation, sharing the same refresh cycle and JSON proxy setting.
+
+Displays:
+
+- SFI, A index, K index, X-Ray, Sunspots, Solar wind/Bz, Geomag, Noise, Aurora (identical top rows to HF Propagation)
+- HamQSL VHF phenomena: VHF Aurora (with auroral latitude, when supplied), and E-Skip conditions for 6m Europe, 4m Europe, 2m Europe, and 2m North America
+- Last update time and status
 
 ### Greyline
 

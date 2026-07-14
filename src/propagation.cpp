@@ -164,6 +164,37 @@ String getXmlBandValueWithFallback(const String& xml, const char* bandName,
   return getXmlBandValue(xml, groupName, timeName);
 }
 
+String getXmlPhenomenonValue(const String& xml, const char* name, const char* location) {
+  int pos = 0;
+  const String wantedName = String("name=\"") + name + "\"";
+  const String wantedLocation = String("location=\"") + location + "\"";
+  while (true) {
+    const int tagStart = xml.indexOf("<phenomenon", pos);
+    if (tagStart < 0) {
+      return "";
+    }
+
+    const int tagEnd = xml.indexOf(">", tagStart);
+    if (tagEnd < 0) {
+      return "";
+    }
+
+    const String attrs = xml.substring(tagStart, tagEnd);
+    const int close = xml.indexOf("</phenomenon>", tagEnd);
+    if (close < 0) {
+      return "";
+    }
+
+    if (attrs.indexOf(wantedName) >= 0 && attrs.indexOf(wantedLocation) >= 0) {
+      String value = xml.substring(tagEnd + 1, close);
+      value.trim();
+      return value;
+    }
+
+    pos = close + 13;
+  }
+}
+
 String getJsonField(const String& json, const char* key) {
   const String marker = String("\"") + key + "\"";
   int pos = json.indexOf(marker);
@@ -280,6 +311,13 @@ bool parseHamQslXml(String& xml, PropagationData& parsed) {
   parsed.band12m = valueOrDash(getXmlBandValueWithFallback(xml, "12m", "12m-10m", "day"));
   parsed.band10m = valueOrDash(getXmlBandValueWithFallback(xml, "10m", "12m-10m", "day"));
 
+  parsed.vhfAurora = valueOrDash(getXmlPhenomenonValue(xml, "vhf-aurora", "northern_hemi"));
+  parsed.vhfAuroraLat = valueOrDash(getXmlTagValue(xml, "latdegree"));
+  parsed.vhfEsEurope = valueOrDash(getXmlPhenomenonValue(xml, "E-Skip", "europe"));
+  parsed.vhfEsNorthAmerica = valueOrDash(getXmlPhenomenonValue(xml, "E-Skip", "north_america"));
+  parsed.vhfEsEurope6m = valueOrDash(getXmlPhenomenonValue(xml, "E-Skip", "europe_6m"));
+  parsed.vhfEsEurope4m = valueOrDash(getXmlPhenomenonValue(xml, "E-Skip", "europe_4m"));
+
   if (parsed.sfi == "--" || parsed.aIndex == "--" || parsed.kIndex == "--") {
     return false;
   }
@@ -328,6 +366,12 @@ bool parsePropagationJson(String& json, PropagationData& parsed) {
   if (parsed.band3020Day == "--") parsed.band3020Day = parsed.band30m;
   if (parsed.band1715Day == "--") parsed.band1715Day = parsed.band17m;
   if (parsed.band1210Day == "--") parsed.band1210Day = parsed.band12m;
+  parsed.vhfAurora = valueOrDash(getJsonField(json, "vhf_aurora"));
+  parsed.vhfAuroraLat = valueOrDash(firstJsonField(json, "aurora_lat", "lat_degree"));
+  parsed.vhfEsEurope = valueOrDash(getJsonField(json, "es_europe"));
+  parsed.vhfEsNorthAmerica = valueOrDash(getJsonField(json, "es_north_america"));
+  parsed.vhfEsEurope6m = valueOrDash(getJsonField(json, "es_europe_6m"));
+  parsed.vhfEsEurope4m = valueOrDash(getJsonField(json, "es_europe_4m"));
   parsed.updatedUtc = isoTimeToDisplay(getJsonField(json, "updated"));
 
   if (parsed.sfi == "--" || parsed.aIndex == "--" || parsed.kIndex == "--") {
@@ -402,6 +446,12 @@ void setEmptyPropagationFields(const String& status) {
   g_data.band15m = "--";
   g_data.band12m = "--";
   g_data.band10m = "--";
+  g_data.vhfAurora = "--";
+  g_data.vhfAuroraLat = "--";
+  g_data.vhfEsEurope = "--";
+  g_data.vhfEsNorthAmerica = "--";
+  g_data.vhfEsEurope6m = "--";
+  g_data.vhfEsEurope4m = "--";
   g_data.updatedUtc = "--";
   g_data.status = status;
 }
