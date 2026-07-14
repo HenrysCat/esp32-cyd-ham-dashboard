@@ -20,6 +20,7 @@ SPIClass touchSpi(HSPI);
 enum DashboardPage : uint8_t {
   kPageClock = 0,
   kPagePropagation,
+  kPageVhf,
   kPageGreyline,
   kPageDx,
   kPageCount
@@ -83,6 +84,13 @@ String g_lastPropBandC;
 String g_lastPropBandD;
 String g_lastPropUpdated;
 String g_lastPropStatus;
+String g_lastVhfAurora;
+String g_lastVhfEsEurope;
+String g_lastVhfEsNorthAmerica;
+String g_lastVhfEsEurope6m;
+String g_lastVhfEsEurope4m;
+String g_lastVhfUpdated;
+String g_lastVhfStatus;
 String g_lastGreyUtc;
 String g_lastGreyQth;
 String g_lastGreyLatLon;
@@ -151,6 +159,13 @@ void clearPageState() {
   g_lastPropBandD = "";
   g_lastPropUpdated = "";
   g_lastPropStatus = "";
+  g_lastVhfAurora = "";
+  g_lastVhfEsEurope = "";
+  g_lastVhfEsNorthAmerica = "";
+  g_lastVhfEsEurope6m = "";
+  g_lastVhfEsEurope4m = "";
+  g_lastVhfUpdated = "";
+  g_lastVhfStatus = "";
   g_lastGreyUtc = "";
   g_lastGreyQth = "";
   g_lastGreyLatLon = "";
@@ -401,6 +416,75 @@ void drawConditionRow(String& last, const String& label, const String& day,
   last = value;
 }
 
+uint16_t vhfConditionColor(const String& value) {
+  String level = value;
+  level.trim();
+  level.toUpperCase();
+  if (level.indexOf("CLOSED") >= 0 || level.indexOf("POOR") >= 0) {
+    return TFT_RED;
+  }
+  if (level.indexOf("OPEN") >= 0 || level.indexOf("HIGH") >= 0 || level.indexOf("GOOD") >= 0) {
+    return TFT_GREEN;
+  }
+  if (level.indexOf("MODERATE") >= 0 || level.indexOf("FAIR") >= 0) {
+    return TFT_YELLOW;
+  }
+  return kMuted;
+}
+
+void drawVhfConditionRow(String& last, const String& label, const String& value, int16_t y) {
+  const String combined = label + "|" + value;
+  if (combined == last) {
+    return;
+  }
+
+  const int16_t rowTop = y - 2;
+  const int16_t rowHeight = tft.fontHeight(2) + 4;
+  tft.fillRect(5, rowTop, tft.width() - 10, rowHeight, kBg);
+  drawLeft(label, 8, y, 2, kText);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(vhfConditionColor(value), kBg);
+  tft.drawString(value, tft.width() - 12, y, 2);
+  last = combined;
+}
+
+uint16_t auroraLatColor(const String& value) {
+  float lat = 0.0f;
+  if (!numericReading(value, lat)) {
+    return kMuted;
+  }
+  // Unlike HF, VHF operators chase aurora backscatter, so a lower latitude
+  // (aurora expanded further south, more active/workable) is favourable and
+  // the ~67.5 baseline (aurora confined near the pole, effectively closed) is not.
+  if (lat >= 65.0f) return TFT_RED;
+  if (lat >= 55.0f) return TFT_YELLOW;
+  return TFT_GREEN;
+}
+
+void drawVhfAuroraRow(String& last, const String& status, const String& lat, int16_t y) {
+  const String combined = status + "|" + lat;
+  if (combined == last) {
+    return;
+  }
+
+  const int16_t rowTop = y - 2;
+  const int16_t rowHeight = tft.fontHeight(2) + 4;
+  tft.fillRect(5, rowTop, tft.width() - 10, rowHeight, kBg);
+
+  int16_t x = 8;
+  drawLeft("VHF Aurora", x, y, 2, kText);
+  x += tft.textWidth("VHF Aurora", 2);
+  if (lat.length() > 0 && lat != "--") {
+    const String latText = " (Lat " + lat + ")";
+    drawLeft(latText, x, y, 2, auroraLatColor(lat));
+  }
+
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(vhfConditionColor(status), kBg);
+  tft.drawString(status, tft.width() - 12, y, 2);
+  last = combined;
+}
+
 bool ensureMapSprite() {
   if (g_mapSpriteReady) {
     return true;
@@ -630,6 +714,7 @@ void drawPropagationPage(const ClockSnapshot& snapshot) {
     tft.drawRect(4, 88, tft.width() - 8, 104, kPanel);
     tft.drawFastVLine(112, 88, 104, kPanel);
     tft.drawFastVLine(216, 88, 104, kPanel);
+    drawLeft("Band", 8, 92, 2, kMuted);
     drawCenteredAt("Day", 164, 92, 2, kMuted);
     drawCenteredAt("Night", 266, 92, 2, kMuted);
   }
@@ -644,6 +729,31 @@ void drawPropagationPage(const ClockSnapshot& snapshot) {
 
   drawLeftField(g_lastPropUpdated, "Updated: " + propagation.updatedUtc, 8, 194, 2, kMuted, 150);
   drawLeftField(g_lastPropStatus, "Status: " + propagation.status, 164, 194, 2,
+                propagation.status == "OK" ? kAccent : kWarn, 152);
+  drawFooter(snapshot);
+}
+
+void drawVhfPage(const ClockSnapshot& snapshot) {
+  const PropagationData& propagation = getPropagationData();
+
+  if (g_pageDirty) {
+    tft.fillScreen(kBg);
+    drawCentered("VHF Conditions", 4, 4, kAccent);
+    tft.drawRect(4, 30, tft.width() - 8, 58, kPanel);
+    tft.drawRect(4, 88, tft.width() - 8, 104, kPanel);
+  }
+
+  drawTopReadingRows(g_lastPropSfiXray, g_lastPropSunspots, g_lastPropNoise, propagation);
+  tft.drawFastHLine(4, 88, tft.width() - 8, kPanel);
+
+  drawVhfAuroraRow(g_lastVhfAurora, propagation.vhfAurora, propagation.vhfAuroraLat, 92);
+  drawVhfConditionRow(g_lastVhfEsEurope6m, "Es EU 6m", propagation.vhfEsEurope6m, 112);
+  drawVhfConditionRow(g_lastVhfEsEurope4m, "Es EU 4m", propagation.vhfEsEurope4m, 132);
+  drawVhfConditionRow(g_lastVhfEsEurope, "Es EU 2m", propagation.vhfEsEurope, 152);
+  drawVhfConditionRow(g_lastVhfEsNorthAmerica, "Es NA 2m", propagation.vhfEsNorthAmerica, 172);
+
+  drawLeftField(g_lastVhfUpdated, "Updated: " + propagation.updatedUtc, 8, 194, 2, kMuted, 150);
+  drawLeftField(g_lastVhfStatus, "Status: " + propagation.status, 164, 194, 2,
                 propagation.status == "OK" ? kAccent : kWarn, 152);
   drawFooter(snapshot);
 }
@@ -727,6 +837,9 @@ void drawCurrentPage(const ClockSnapshot& snapshot) {
       break;
     case kPagePropagation:
       drawPropagationPage(snapshot);
+      break;
+    case kPageVhf:
+      drawVhfPage(snapshot);
       break;
     case kPageGreyline:
       drawGreylinePage(snapshot);
@@ -825,11 +938,16 @@ void handleTouch() {
 
   if (touched && !g_touchWasDown && nowMs - g_lastTouchActionMs >= kTouchDebounceMs) {
     g_lastTouchActionMs = nowMs;
-    if (g_currentPage == kPagePropagation &&
+    if ((g_currentPage == kPagePropagation || g_currentPage == kPageVhf) &&
         x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestPropagationRefresh();
-      g_lastPropStatus = "";
-      drawLeftField(g_lastPropStatus, "Status: Refreshing", 166, 194, 2, kMuted);
+      if (g_currentPage == kPagePropagation) {
+        g_lastPropStatus = "";
+        drawLeftField(g_lastPropStatus, "Status: Refreshing", 166, 194, 2, kMuted);
+      } else {
+        g_lastVhfStatus = "";
+        drawLeftField(g_lastVhfStatus, "Status: Refreshing", 166, 194, 2, kMuted);
+      }
     } else if (g_currentPage == kPageDx &&
                x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestDxSpotsRefresh();

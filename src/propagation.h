@@ -32,6 +32,12 @@ struct PropagationData {
   String band15m;
   String band12m;
   String band10m;
+  String vhfAurora;
+  String vhfAuroraLat;
+  String vhfEsEurope;
+  String vhfEsNorthAmerica;
+  String vhfEsEurope6m;
+  String vhfEsEurope4m;
   String updatedUtc;
   String status;
 };
