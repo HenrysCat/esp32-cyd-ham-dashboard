@@ -301,6 +301,23 @@ uint16_t qualitativeReadingColor(const String& reading, const char* parameter) {
     if (level.indexOf("ACTIVE") >= 0 || level.indexOf("STORM") >= 0) return TFT_RED;
   }
   if (String(parameter) == "Noise") {
+    // HamQSL reports noise as an S-meter level or range, e.g. "S0-S1", "S3", "S5-S7".
+    // Use the highest S number present to gauge severity.
+    int maxS = -1;
+    for (size_t i = 0; i < level.length(); ++i) {
+      if (level[i] == 'S' && i + 1 < level.length() && isDigit(level[i + 1])) {
+        size_t j = i + 1;
+        int num = 0;
+        while (j < level.length() && isDigit(level[j])) {
+          num = num * 10 + (level[j] - '0');
+          j++;
+        }
+        if (num > maxS) maxS = num;
+      }
+    }
+    if (maxS >= 0) {
+      return maxS <= 3 ? TFT_GREEN : maxS <= 5 ? TFT_YELLOW : TFT_RED;
+    }
     if (level.indexOf("LOW") >= 0 || level == "NORMAL") return TFT_GREEN;
     if (level.indexOf("MODERATE") >= 0 || level.indexOf("MEDIUM") >= 0) return TFT_YELLOW;
     if (level.indexOf("HIGH") >= 0) return TFT_RED;
