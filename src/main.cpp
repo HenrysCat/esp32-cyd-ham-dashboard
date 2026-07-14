@@ -2,6 +2,7 @@
 
 #include "connectivity.h"
 #include "dashboard_display.h"
+#include "reset_button.h"
 #include "settings.h"
 #include "setup_portal.h"
 
@@ -15,6 +16,7 @@ void setup() {
 
   settingsBegin();
   displayBegin();
+  resetButtonBegin();
   setupPortalBegin();
   connectivityBegin();
   displayUpdate(getClockSnapshot());
@@ -23,6 +25,9 @@ void setup() {
 void loop() {
   setupPortalLoop();
   connectivityLoop();
-  displayUpdate(getClockSnapshot());
+  const bool resettingNow = resetButtonLoop();
+  if (!resettingNow) {
+    displayUpdate(getClockSnapshot());
+  }
   delay(kLoopDelayMs);
 }

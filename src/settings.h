@@ -25,9 +25,11 @@ struct AppSettings {
   uint16_t dxRefreshMinutes;
   uint8_t brightnessPercent;
   bool swapRedBlueChannels;
+  bool keepHotspotOn;
 };
 
 void settingsBegin();
 const AppSettings& getSettings();
 void saveSettings(const AppSettings& settings);
 bool hasWifiCredentials();
+void factoryResetSettings();

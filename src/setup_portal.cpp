@@ -17,6 +17,8 @@ constexpr byte kDnsPort = 53;
 constexpr char kApSsid[] = "CYD-HamClock-Setup";
 constexpr char kApPassword[] = "hamclock";
 
+constexpr uint32_t kApAutoOffConfirmMs = 8000;
+
 DNSServer dnsServer;
 WebServer server(80);
 bool portalStarted = false;
@@ -25,6 +27,26 @@ bool pendingWifiReconnect = false;
 uint32_t pendingWifiReconnectAtMs = 0;
 bool pendingReboot = false;
 uint32_t pendingRebootAtMs = 0;
+bool hotspotActive = false;
+uint32_t staConfirmedSinceMs = 0;
+
+void startHotspot() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(kApSsid, kApPassword);
+  delay(100);
+  dnsServer.start(kDnsPort, "*", WiFi.softAPIP());
+  hotspotActive = true;
+  staConfirmedSinceMs = 0;
+  Serial.println("Setup hotspot is on");
+}
+
+void stopHotspot() {
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  hotspotActive = false;
+  Serial.println("Setup hotspot turned off (Wi-Fi connection confirmed)");
+}
 
 String htmlEscape(const String& input) {
   String out;
@@ -170,12 +192,14 @@ String pageHtml(const String& message = "") {
   html += htmlEscape(dx.source);
   html += F(" / ");
   html += htmlEscape(dx.status);
-  html += F("</code></div><div>Setup AP: <code>");
+  html += F("</code></div><div>Setup hotspot: <strong class='");
+  html += hotspotActive ? F("warn'>on") : F("ok'>off");
+  html += F("</strong></div><div>Setup AP: <code>");
   html += kApSsid;
   html += F("</code>, password <code>");
   html += kApPassword;
   html += F("</code></div><div>Portal IP: <code>");
-  html += WiFi.softAPIP().toString();
+  html += hotspotActive ? WiFi.softAPIP().toString() : String("--");
   html += F("</code></div></div>");
 
   html += F("<form method='post' action='/save'><div class='card'><h2>Station</h2>");
@@ -187,6 +211,11 @@ String pageHtml(const String& message = "") {
   html += F("' autocomplete='off'>");
   html += F("<label for='pass'>Wi-Fi password</label><input id='pass' name='pass' type='password' value='' maxlength='64' autocomplete='new-password' placeholder='Leave blank to keep saved password'>");
   html += F("<label><input name='clearpass' type='checkbox' value='1'>Clear the saved password (for an open network)</label>");
+  html += F("<label><input name='keepap' type='checkbox' value='1'");
+  html += checked(settings.keepHotspotOn);
+  html += F(">Keep the <code>");
+  html += kApSsid;
+  html += F("</code> setup hotspot switched on</label><small>By default this hotspot switches off a few seconds after the device confirms it has joined your Wi-Fi network. Check this box to leave it running (for example, to reach the settings page again without your router).</small>");
   html += F("</div><div class='card'><h2>Time and Location</h2>");
   html += F("<label for='tzpreset'>Timezone preset</label><select id='tzpreset' onchange='applyPreset(this.value)'>");
   html += F("<option value='CUSTOM'>Custom POSIX TZ</option>");
@@ -327,6 +356,7 @@ void handleSave() {
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
   settings.swapRedBlueChannels = server.hasArg("swaprb");
+  settings.keepHotspotOn = server.hasArg("keepap");
   saveSettings(settings);
   applyTimezoneSettings();
   applyDisplaySettings();
@@ -361,16 +391,18 @@ void handleRebootGet() {
 }
 
 void handleCaptiveRedirect() {
+  if (!hotspotActive) {
+    handleRoot();
+    return;
+  }
   server.sendHeader("Location", String("http://") + WiFi.softAPIP().toString(), true);
   server.send(302, "text/plain", "");
 }
 }
 
 void setupPortalBegin() {
-  WiFi.softAP(kApSsid, kApPassword);
-  delay(100);
+  startHotspot();
 
-  dnsServer.start(kDnsPort, "*", WiFi.softAPIP());
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/status", HTTP_GET, handleStatusJson);
@@ -403,9 +435,31 @@ void setupPortalLoop() {
       Serial.println("mDNS start failed");
     }
   }
-  dnsServer.processNextRequest();
-  server.handleClient();
+
+  const AppSettings& settings = getSettings();
+  const bool staConnected =
+      WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
   const uint32_t nowMs = millis();
+
+  if (settings.keepHotspotOn) {
+    staConfirmedSinceMs = 0;
+    if (!hotspotActive) {
+      startHotspot();
+    }
+  } else if (staConnected) {
+    if (staConfirmedSinceMs == 0) {
+      staConfirmedSinceMs = nowMs;
+    } else if (hotspotActive && deadlineReached(nowMs, staConfirmedSinceMs + kApAutoOffConfirmMs)) {
+      stopHotspot();
+    }
+  } else {
+    staConfirmedSinceMs = 0;
+  }
+
+  if (hotspotActive) {
+    dnsServer.processNextRequest();
+  }
+  server.handleClient();
   if (pendingWifiReconnect && deadlineReached(nowMs, pendingWifiReconnectAtMs)) {
     pendingWifiReconnect = false;
     reconnectWifi();
