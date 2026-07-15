@@ -273,34 +273,34 @@ uint16_t readingColor(const String& reading, const char* parameter) {
     String level = reading;
     level.trim();
     level.toUpperCase();
-    if (level.startsWith("A") || level.startsWith("B")) return TFT_GREEN;
-    if (level.startsWith("C")) return TFT_YELLOW;
-    if (level.startsWith("M") || level.startsWith("X")) return TFT_RED;
+    if (level.startsWith("A") || level.startsWith("B") || level.startsWith("C")) return TFT_GREEN;
+    if (level.startsWith("M")) return TFT_YELLOW;
+    if (level.startsWith("X")) return TFT_RED;
     return kMuted;
   }
 
   if (!numericReading(reading, value)) return kMuted;
 
   if (String(parameter) == "SFI") {
-    return value > 120.0f ? TFT_GREEN : value >= 90.0f ? TFT_YELLOW : TFT_RED;
+    return value >= 120.0f ? TFT_GREEN : value >= 70.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "SN") {
-    return value > 80.0f ? TFT_GREEN : value >= 40.0f ? TFT_YELLOW : TFT_RED;
+    return value >= 70.0f ? TFT_GREEN : value >= 10.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "K") {
-    return value <= 2.0f ? TFT_GREEN : value <= 3.0f ? TFT_YELLOW : TFT_RED;
+    return value <= 5.0f ? TFT_GREEN : value <= 6.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "A") {
-    return value <= 10.0f ? TFT_GREEN : value <= 20.0f ? TFT_YELLOW : TFT_RED;
+    return value <= 49.0f ? TFT_GREEN : value <= 99.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "SW") {
-    return value < 450.0f ? TFT_GREEN : value <= 600.0f ? TFT_YELLOW : TFT_RED;
+    return value < 500.0f ? TFT_GREEN : value < 600.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "Bz") {
-    return value > 0.0f ? TFT_GREEN : value >= -5.0f ? TFT_YELLOW : TFT_RED;
+    return value >= -10.0f ? TFT_GREEN : value >= -20.0f ? TFT_YELLOW : TFT_RED;
   }
   if (String(parameter) == "Aurora") {
-    return value <= 10.0f ? TFT_GREEN : value <= 30.0f ? TFT_YELLOW : TFT_RED;
+    return value <= 8.0f ? TFT_GREEN : value <= 9.0f ? TFT_YELLOW : TFT_RED;
   }
   return kMuted;
 }
@@ -311,9 +311,15 @@ uint16_t qualitativeReadingColor(const String& reading, const char* parameter) {
   level.toUpperCase();
 
   if (String(parameter) == "Geomag") {
-    if (level.indexOf("QUIET") >= 0 || level == "NORMAL") return TFT_GREEN;
-    if (level.indexOf("UNSETTLED") >= 0) return TFT_YELLOW;
-    if (level.indexOf("ACTIVE") >= 0 || level.indexOf("STORM") >= 0) return TFT_RED;
+    // HamQSL reports: Inactive, Very Quiet, Quiet, Unsettled, Active, Minor Storm,
+    // Major Storm, Severe Storm, Extreme Storm - in increasing order of K-index severity.
+    if (level.length() == 0 || level == "--") return kMuted;
+    if (level.indexOf("SEVERE") >= 0 || level.indexOf("EXTREME") >= 0) return TFT_RED;
+    if (level.indexOf("MAJOR") >= 0) return TFT_YELLOW;
+    if (level.indexOf("QUIET") >= 0 || level.indexOf("UNSETTLED") >= 0 ||
+        level.indexOf("ACTIVE") >= 0 || level.indexOf("STORM") >= 0 ||
+        level == "INACTIVE" || level == "NORMAL") return TFT_GREEN;
+    return kMuted;
   }
   if (String(parameter) == "Noise") {
     // HamQSL reports noise as an S-meter level or range, e.g. "S0-S1", "S3", "S5-S7".
@@ -331,7 +337,7 @@ uint16_t qualitativeReadingColor(const String& reading, const char* parameter) {
       }
     }
     if (maxS >= 0) {
-      return maxS <= 3 ? TFT_GREEN : maxS <= 5 ? TFT_YELLOW : TFT_RED;
+      return maxS <= 6 ? TFT_GREEN : maxS <= 9 ? TFT_YELLOW : TFT_RED;
     }
     if (level.indexOf("LOW") >= 0 || level == "NORMAL") return TFT_GREEN;
     if (level.indexOf("MODERATE") >= 0 || level.indexOf("MEDIUM") >= 0) return TFT_YELLOW;
