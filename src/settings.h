@@ -25,6 +25,8 @@ struct AppSettings {
   uint16_t dxRefreshMinutes;
   uint8_t brightnessPercent;
   bool swapRedBlueChannels;
+  bool rotate90;
+  bool flip180;
   bool keepHotspotOn;
 };
 
