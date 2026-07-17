@@ -285,7 +285,17 @@ String pageHtml(const String& message = "") {
   if (settings.swapRedBlueChannels) {
     html += F(" checked");
   }
-  html += F(">Swap red/blue display channels</label><small>Enable this only when red appears blue and yellow appears cyan. It is applied immediately and saved for this board.</small></div>");
+  html += F(">Swap red/blue display channels</label><small>Enable this only when red appears blue and yellow appears cyan. It is applied immediately and saved for this board.</small>");
+  html += F("<label><input name='rot90' type='checkbox' value='1'");
+  if (settings.rotate90) {
+    html += F(" checked");
+  }
+  html += F(">Rotate display 90&deg;</label><small>Enable this if the screen shows portrait and cropped on first start.</small>");
+  html += F("<label><input name='flip180' type='checkbox' value='1'");
+  if (settings.flip180) {
+    html += F(" checked");
+  }
+  html += F(">Flip display 180&deg;</label><small>Enable this if the screen is upside down.</small></div>");
   html += F("<button type='submit'>Save settings</button></form>");
   html += F("<form method='post' action='/reboot'><button class='danger' type='submit'>Restart device</button></form>");
   html += F("<p><small>This page is intended for trusted LAN use only. No admin password is configured in this project.</small></p>");
@@ -356,6 +366,8 @@ void handleSave() {
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
   settings.swapRedBlueChannels = server.hasArg("swaprb");
+  settings.rotate90 = server.hasArg("rot90");
+  settings.flip180 = server.hasArg("flip180");
   settings.keepHotspotOn = server.hasArg("keepap");
   saveSettings(settings);
   applyTimezoneSettings();

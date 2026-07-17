@@ -147,6 +147,7 @@ The setup page lets you configure:
 - DX source mode, JSON URL, and Telnet host/port
 - Refresh intervals
 - Backlight brightness
+- Display colour swap and orientation (90-degree rotate, 180-degree flip) for differently wired CYD panels
 
 Settings are saved to ESP32 Preferences and persist after reboot.
 The saved Wi-Fi password is never displayed in the settings page. Leave the password field blank to keep it, or use the checkbox to clear it for an open network.

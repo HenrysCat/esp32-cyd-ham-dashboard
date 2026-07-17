@@ -54,7 +54,15 @@ constexpr int16_t kMapY = 4;
 constexpr int16_t kMapW = 300;
 constexpr int16_t kMapH = 150;
 constexpr uint8_t kIli9341Madctl = 0x36;
-constexpr uint8_t kIli9341MadctlRotation0 = 0x40;
+// Base orientation for this board's known-good wiring (MX only, no row/column
+// exchange). MV genuinely swaps which physical axis is "wide", which is what
+// CYD units needing a 90-degree turn are missing; MX/MY together mirror both
+// axes for a 180-degree flip within the same wide/tall family. All four
+// resulting bytes match TFT_eSPI's own ILI9341 rotation table (rotations
+// 0/2/5/7), so none of these combinations are unverified guesses.
+constexpr uint8_t kIli9341MadctlMx = 0x40;
+constexpr uint8_t kIli9341MadctlMy = 0x80;
+constexpr uint8_t kIli9341MadctlMv = 0x20;
 constexpr uint8_t kIli9341MadctlBgr = 0x08;
 
 DashboardPage g_currentPage = kPageClock;
@@ -933,6 +941,14 @@ bool getTouchPoint(uint16_t& x, uint16_t& y) {
     y = baseY;
   }
 
+  // The touch controller is wired independently of the display, so flipping
+  // the screen via MADCTL does not change what a physical tap reports here.
+  // Mirror the point to match what is now visually on screen.
+  if (getSettings().flip180) {
+    x = tft.width() - 1 - x;
+    y = tft.height() - 1 - y;
+  }
+
   return true;
 }
 
@@ -1004,13 +1020,23 @@ void displayUpdate(const ClockSnapshot& snapshot) {
 void applyDisplaySettings() {
   const AppSettings& settings = getSettings();
 
-  // TFT_eSPI's RGB/BGR order is normally fixed at compile time. Set the ILI9341
-  // MADCTL colour-order bit here so differently wired CYD panels can be corrected
-  // from the web settings page without rebuilding firmware.
+  // TFT_eSPI's RGB/BGR order and orientation are normally fixed at compile
+  // time. Write the ILI9341 MADCTL byte directly here so differently wired
+  // CYD panels (wrong colour order, upside down, or needing a 90-degree
+  // turn) can be corrected from the web settings page without rebuilding
+  // firmware.
+  uint8_t madctl = kIli9341MadctlMx;
+  if (settings.flip180) {
+    madctl ^= (kIli9341MadctlMx | kIli9341MadctlMy);
+  }
+  if (settings.rotate90) {
+    madctl |= kIli9341MadctlMv;
+  }
+  madctl |= (settings.swapRedBlueChannels ? kIli9341MadctlBgr : 0);
+
   tft.startWrite();
   tft.writecommand(kIli9341Madctl);
-  tft.writedata(kIli9341MadctlRotation0 |
-                (settings.swapRedBlueChannels ? kIli9341MadctlBgr : 0));
+  tft.writedata(madctl);
   tft.endWrite();
 
 #ifdef TFT_BL

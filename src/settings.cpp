@@ -138,6 +138,8 @@ void settingsBegin() {
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
+  currentSettings.rotate90 = preferences.getBool("rot90", false);
+  currentSettings.flip180 = preferences.getBool("flip180", false);
   currentSettings.keepHotspotOn = preferences.getBool("apalwayson", false);
   normalizeSettings(currentSettings);
 }
@@ -166,6 +168,8 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("dxmins", currentSettings.dxRefreshMinutes);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
+  preferences.putBool("rot90", currentSettings.rotate90);
+  preferences.putBool("flip180", currentSettings.flip180);
   preferences.putBool("apalwayson", currentSettings.keepHotspotOn);
 }
 
