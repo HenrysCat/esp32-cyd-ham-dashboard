@@ -29,6 +29,7 @@ struct AppSettings {
   bool flip180;
   bool mirror;
   bool invertColours;
+  bool swapTouchNav;
   bool keepHotspotOn;
 };
 
