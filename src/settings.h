@@ -27,6 +27,8 @@ struct AppSettings {
   bool swapRedBlueChannels;
   bool rotate90;
   bool flip180;
+  bool mirror;
+  bool invertColours;
   bool keepHotspotOn;
 };
 

@@ -14,3 +14,11 @@
 
 // Optional JSON endpoint for DX spots. Leave empty to use the default IZ3MEZ feed.
 #define DX_SPOTS_URL ""
+
+// Display defaults for this board's wiring, applied on first boot or after a
+// factory reset. Once saved via the web settings page these are overridden by
+// the value stored on the device, so changing these later has no effect until
+// the next factory reset.
+#define ROTATE90_DEFAULT true
+#define MIRROR_DEFAULT true
+#define INVERT_COLOURS_DEFAULT true

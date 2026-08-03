@@ -949,6 +949,10 @@ bool getTouchPoint(uint16_t& x, uint16_t& y) {
     y = tft.height() - 1 - y;
   }
 
+  if (getSettings().mirror) {
+    x = tft.width() - 1 - x;
+  }
+
   return true;
 }
 
@@ -976,9 +980,9 @@ void handleTouch() {
       g_lastDxStatus = "";
       drawLeftField(g_lastDxStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
     } else if (x < tft.width() / 2) {
-      nextPage();
-    } else {
       previousPage();
+    } else {
+      nextPage();
     }
   }
 
@@ -1025,12 +1029,20 @@ void applyDisplaySettings() {
   // CYD panels (wrong colour order, upside down, or needing a 90-degree
   // turn) can be corrected from the web settings page without rebuilding
   // firmware.
-  uint8_t madctl = kIli9341MadctlMx;
+  // MV (row/column exchange) is a transpose, which on its own is a diagonal
+  // mirror rather than a clean rotation. Pairing it with MX (this board's
+  // base orientation) keeps that mirror; using MV alone instead gives a
+  // proper 90-degree turn, so rotate90 swaps the base bit rather than adding
+  // to it.
+  uint8_t madctl = settings.rotate90 ? kIli9341MadctlMv : kIli9341MadctlMx;
   if (settings.flip180) {
     madctl ^= (kIli9341MadctlMx | kIli9341MadctlMy);
   }
-  if (settings.rotate90) {
-    madctl |= kIli9341MadctlMv;
+  // A mirror is a single-axis flip, so it toggles whichever bit currently
+  // controls the screen's horizontal axis. MV (rotate90) swaps row/column
+  // meaning, so that axis is MY when rotated and MX otherwise.
+  if (settings.mirror) {
+    madctl ^= (settings.rotate90 ? kIli9341MadctlMy : kIli9341MadctlMx);
   }
   madctl |= (settings.swapRedBlueChannels ? kIli9341MadctlBgr : 0);
 
@@ -1038,6 +1050,8 @@ void applyDisplaySettings() {
   tft.writecommand(kIli9341Madctl);
   tft.writedata(madctl);
   tft.endWrite();
+
+  tft.invertDisplay(settings.invertColours);
 
 #ifdef TFT_BL
   constexpr uint8_t kBacklightChannel = 0;

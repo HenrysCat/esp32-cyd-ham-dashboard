@@ -295,7 +295,17 @@ String pageHtml(const String& message = "") {
   if (settings.flip180) {
     html += F(" checked");
   }
-  html += F(">Flip display 180&deg;</label><small>Enable this if the screen is upside down.</small></div>");
+  html += F(">Flip display 180&deg;</label><small>Enable this if the screen is upside down.</small>");
+  html += F("<label><input name='mirror' type='checkbox' value='1'");
+  if (settings.mirror) {
+    html += F(" checked");
+  }
+  html += F(">Mirror display</label><small>Enable this if the screen shows text and images left-right reversed, as on some CYD panel variants.</small>");
+  html += F("<label><input name='invert' type='checkbox' value='1'");
+  if (settings.invertColours) {
+    html += F(" checked");
+  }
+  html += F(">Invert display colours</label><small>Enable this if colours appear as their negative/inverse, as on some CYD panel variants.</small></div>");
   html += F("<button type='submit'>Save settings</button></form>");
   html += F("<form method='post' action='/reboot'><button class='danger' type='submit'>Restart device</button></form>");
   html += F("<p><small>This page is intended for trusted LAN use only. No admin password is configured in this project.</small></p>");
@@ -368,6 +378,8 @@ void handleSave() {
   settings.swapRedBlueChannels = server.hasArg("swaprb");
   settings.rotate90 = server.hasArg("rot90");
   settings.flip180 = server.hasArg("flip180");
+  settings.mirror = server.hasArg("mirror");
+  settings.invertColours = server.hasArg("invert");
   settings.keepHotspotOn = server.hasArg("keepap");
   saveSettings(settings);
   applyTimezoneSettings();

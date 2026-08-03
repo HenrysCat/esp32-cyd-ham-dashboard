@@ -14,3 +14,11 @@
 
 // Optional JSON endpoint for DX spots. Leave empty to use the default IZ3MEZ feed.
 #define DX_SPOTS_URL ""
+
+// Optional display defaults for boards that always need the same orientation
+// fix, applied on first boot or after a factory reset. These can otherwise be
+// set per-device from the web settings page instead. Uncomment to override.
+// #define ROTATE90_DEFAULT true
+// #define FLIP180_DEFAULT true
+// #define MIRROR_DEFAULT true
+// #define INVERT_COLOURS_DEFAULT true
