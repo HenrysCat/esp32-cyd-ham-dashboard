@@ -22,6 +22,19 @@ constexpr uint16_t kDefaultPropagationRefreshMinutes = 15;
 constexpr uint16_t kDefaultDxRefreshMinutes = 5;
 constexpr uint8_t kDefaultBrightnessPercent = 100;
 
+#ifndef ROTATE90_DEFAULT
+#define ROTATE90_DEFAULT false
+#endif
+#ifndef FLIP180_DEFAULT
+#define FLIP180_DEFAULT false
+#endif
+#ifndef MIRROR_DEFAULT
+#define MIRROR_DEFAULT false
+#endif
+#ifndef INVERT_COLOURS_DEFAULT
+#define INVERT_COLOURS_DEFAULT false
+#endif
+
 bool isPlaceholderCredential(const char* value) {
   return value == nullptr || value[0] == '\0' || String(value).startsWith("your-");
 }
@@ -138,8 +151,10 @@ void settingsBegin() {
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
-  currentSettings.rotate90 = preferences.getBool("rot90", false);
-  currentSettings.flip180 = preferences.getBool("flip180", false);
+  currentSettings.rotate90 = preferences.getBool("rot90", ROTATE90_DEFAULT);
+  currentSettings.flip180 = preferences.getBool("flip180", FLIP180_DEFAULT);
+  currentSettings.mirror = preferences.getBool("mirror", MIRROR_DEFAULT);
+  currentSettings.invertColours = preferences.getBool("invert", INVERT_COLOURS_DEFAULT);
   currentSettings.keepHotspotOn = preferences.getBool("apalwayson", false);
   normalizeSettings(currentSettings);
 }
@@ -170,6 +185,8 @@ void saveSettings(const AppSettings& settings) {
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
   preferences.putBool("rot90", currentSettings.rotate90);
   preferences.putBool("flip180", currentSettings.flip180);
+  preferences.putBool("mirror", currentSettings.mirror);
+  preferences.putBool("invert", currentSettings.invertColours);
   preferences.putBool("apalwayson", currentSettings.keepHotspotOn);
 }
 
