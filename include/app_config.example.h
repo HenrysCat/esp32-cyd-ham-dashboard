@@ -22,3 +22,4 @@
 // #define FLIP180_DEFAULT true
 // #define MIRROR_DEFAULT true
 // #define INVERT_COLOURS_DEFAULT true
+// #define SWAP_TOUCH_NAV_DEFAULT true

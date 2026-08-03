@@ -675,14 +675,7 @@ bool readDxArrayPrefix(Stream& stream, String& arrayJson) {
   return false;
 }
 
-bool parseIz3mezDxJson(Stream& stream, DxSpotsData& parsed) {
-  String arrayJson;
-  arrayJson.reserve(kMaxDxObjectChars * 3);
-  if (!readDxArrayPrefix(stream, arrayJson)) {
-    Serial.println("DX JSON parse result: no buffered spots");
-    return false;
-  }
-
+bool parseIz3mezJsonArray(const String& arrayJson, DxSpotsData& parsed) {
   DynamicJsonDocument doc(24576);
   DeserializationError error = deserializeJson(doc, arrayJson);
   if (error) {
@@ -771,11 +764,22 @@ bool fetchDxSpots() {
     return false;
   }
 
-  DxSpotsData parsed;
-  bool parsedOk = parseIz3mezDxJson(http.getStream(), parsed);
+  String arrayJson;
+  arrayJson.reserve(kMaxDxObjectChars * 3);
+  const bool gotArray = readDxArrayPrefix(http.getStream(), arrayJson);
+  // Free the TLS connection's own buffers before asking the allocator for a
+  // large contiguous JsonDocument block: holding both at once is what was
+  // pushing the parse into "NoMemory" under heap fragmentation.
   http.end();
 
-  if (!parsedOk) {
+  if (!gotArray) {
+    Serial.println("DX JSON parse result: no buffered spots");
+    markDxFailure("Parse failed", "JSON", jsonProviderName());
+    return false;
+  }
+
+  DxSpotsData parsed;
+  if (!parseIz3mezJsonArray(arrayJson, parsed)) {
     markDxFailure("Parse failed", "JSON", jsonProviderName());
     return false;
   }
@@ -861,8 +865,12 @@ bool refreshDxSpotsIfNeeded(bool wifiConnected) {
   }
 
   if (g_refreshRequested || due) {
-    const bool reconnectFallback = g_refreshRequested;
     const bool telnetWasActive = g_autoUsingTelnet && g_telnetConnected;
+    // A manual refresh tap re-tries JSON in case it's back, but if Telnet is
+    // already connected and working it should be left alone: tearing it down
+    // here only to reconnect from scratch means it never gets an
+    // uninterrupted window to actually receive spots from the cluster.
+    const bool reconnectFallback = g_refreshRequested && !telnetWasActive;
     g_lastAttemptMs = nowMs;
     g_refreshRequested = false;
     if (fetchDxSpots()) {

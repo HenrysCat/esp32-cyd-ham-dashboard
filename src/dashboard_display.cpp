@@ -979,10 +979,13 @@ void handleTouch() {
       requestDxSpotsRefresh();
       g_lastDxStatus = "";
       drawLeftField(g_lastDxStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
-    } else if (x < tft.width() / 2) {
-      previousPage();
     } else {
-      nextPage();
+      const bool tappedLeft = x < tft.width() / 2;
+      if (tappedLeft != getSettings().swapTouchNav) {
+        previousPage();
+      } else {
+        nextPage();
+      }
     }
   }
 
