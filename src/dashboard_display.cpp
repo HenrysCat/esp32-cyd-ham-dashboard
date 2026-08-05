@@ -31,6 +31,19 @@ constexpr uint32_t kTouchDebounceMs = 300;
 constexpr uint32_t kRenderIntervalMs = 250;
 constexpr int16_t kFooterTop = 214;
 constexpr int16_t kFooterHeight = 26;
+constexpr int16_t kFooterY = kFooterTop + 7;
+
+// Fixed columns for the footer when it includes the UTC field (pages 2-5).
+// Each field's text has a constant character count between states (e.g.
+// "WiFi OK" / "WiFi --"), so these boxes never need to shift or resize.
+constexpr int16_t kFooterXUtc = 14;
+constexpr int16_t kFooterWUtc = 69;
+constexpr int16_t kFooterXWifi = 104;
+constexpr int16_t kFooterWWifi = 52;
+constexpr int16_t kFooterXNtp = 177;
+constexpr int16_t kFooterWNtp = 50;
+constexpr int16_t kFooterXPage = 248;
+constexpr int16_t kFooterWPage = 62;
 
 constexpr int8_t kTouchSclk = 25;
 constexpr int8_t kTouchMosi = 32;
@@ -72,7 +85,11 @@ bool g_touchWasDown = false;
 uint32_t g_lastTouchActionMs = 0;
 uint32_t g_lastRenderMs = 0;
 
-String g_lastFooter;
+String g_lastFooterSimple;
+String g_lastFooterUtc;
+String g_lastFooterWifi;
+String g_lastFooterNtp;
+String g_lastFooterPage;
 String g_lastUtc;
 String g_lastLocal;
 String g_lastDate;
@@ -140,14 +157,23 @@ String pageIndicator() {
          "/" + String(kPageCount);
 }
 
-String footerText(const ClockSnapshot& snapshot) {
-  return wifiStatusText(snapshot.wifiConnected) + "   " +
-         ntpStatusText(snapshot.timeValid) + "   " +
-         pageIndicator();
+String footerUtcText(const ClockSnapshot& snapshot) {
+  if (!snapshot.timeValid) {
+    return "UTC --:--";
+  }
+  tm utcTime;
+  gmtime_r(&snapshot.epoch, &utcTime);
+  char buffer[16];
+  strftime(buffer, sizeof(buffer), "UTC %H:%M", &utcTime);
+  return String(buffer);
 }
 
 void clearPageState() {
-  g_lastFooter = "";
+  g_lastFooterSimple = "";
+  g_lastFooterUtc = "";
+  g_lastFooterWifi = "";
+  g_lastFooterNtp = "";
+  g_lastFooterPage = "";
   g_lastUtc = "";
   g_lastLocal = "";
   g_lastDate = "";
@@ -655,15 +681,31 @@ void drawDxSpotRow(String& last, const DxSpot& spot, int16_t y) {
 }
 
 void drawFooter(const ClockSnapshot& snapshot) {
-  const String value = footerText(snapshot);
-  if (value == g_lastFooter) {
+  tft.drawFastHLine(0, kFooterTop, tft.width(), kPanel);
+
+  if (g_currentPage == kPageClock) {
+    // No UTC field here - the clock page already shows a full UTC readout above.
+    const String value = wifiStatusText(snapshot.wifiConnected) + "   " +
+                         ntpStatusText(snapshot.timeValid) + "   " +
+                         pageIndicator();
+    if (value != g_lastFooterSimple) {
+      tft.fillRect(0, kFooterTop + 1, tft.width(), kFooterHeight - 1, kBg);
+      drawCentered(value, kFooterY, 2, kMuted);
+      g_lastFooterSimple = value;
+    }
     return;
   }
 
-  tft.fillRect(0, kFooterTop, tft.width(), kFooterHeight, kBg);
-  tft.drawFastHLine(0, kFooterTop, tft.width(), kPanel);
-  drawCentered(value, kFooterTop + 7, 2, kMuted);
-  g_lastFooter = value;
+  // Each field redraws only its own fixed-width box, so a once-a-minute UTC
+  // tick no longer blanks and repaints the whole footer line.
+  drawLeftField(g_lastFooterUtc, footerUtcText(snapshot), kFooterXUtc, kFooterY, 2, kMuted,
+               kFooterWUtc);
+  drawLeftField(g_lastFooterWifi, wifiStatusText(snapshot.wifiConnected), kFooterXWifi, kFooterY,
+               2, kMuted, kFooterWWifi);
+  drawLeftField(g_lastFooterNtp, ntpStatusText(snapshot.timeValid), kFooterXNtp, kFooterY, 2,
+               kMuted, kFooterWNtp);
+  drawLeftField(g_lastFooterPage, pageIndicator(), kFooterXPage, kFooterY, 2, kMuted,
+               kFooterWPage);
 }
 
 void formatTimes(const ClockSnapshot& snapshot) {

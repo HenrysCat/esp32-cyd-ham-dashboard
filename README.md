@@ -183,7 +183,7 @@ This web UI is intended for a trusted local network. It does not include authent
 - Tap centre on HF Propagation or VHF Conditions page: manual propagation refresh
 - Tap centre on DX Spots page: manual DX refresh
 
-The footer shows Wi-Fi status, NTP status, and current page number.
+The footer shows Wi-Fi status, NTP status, and current page number. On the Propagation, VHF, Greyline, and DX Spots pages it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
 
 ## Dashboard Pages
 
