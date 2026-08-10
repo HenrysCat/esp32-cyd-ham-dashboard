@@ -6,6 +6,8 @@ A HamClock-inspired ham radio dashboard for the ESP32-2432S028R Cheap Yellow Dis
 
 It provides a touch-controlled 320x240 landscape dashboard with UTC/local time, HamQSL propagation data, a greyline map, DX spots, Wi-Fi setup, and a local web settings page.
 
+<a href="https://www.buymeacoffee.com/Henrys_Cat" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 https://github.com/user-attachments/assets/84a32ac5-e0f6-4b6f-89ae-bf321e0d997d
 
 ## Features
