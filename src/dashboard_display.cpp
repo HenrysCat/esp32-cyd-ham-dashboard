@@ -15,6 +15,7 @@
 namespace {
 TFT_eSPI tft(320, 240);
 TFT_eSprite mapSprite(&tft);
+TFT_eSprite dxScrollSprite(&tft);
 SPIClass touchSpi(HSPI);
 
 enum DashboardPage : uint8_t {
@@ -66,6 +67,38 @@ constexpr int16_t kMapX = 10;
 constexpr int16_t kMapY = 4;
 constexpr int16_t kMapW = 300;
 constexpr int16_t kMapH = 150;
+
+// DX spots list geometry. Rows sit on a fixed 17px pitch with font 2 (16px
+// tall); the region starts a couple of pixels above the first row's text.
+constexpr int16_t kDxRowsX = 10;
+constexpr int16_t kDxRowsW = 300;
+constexpr int16_t kDxRowPitch = 17;
+constexpr int16_t kDxRowPad = 2;
+constexpr int16_t kDxRowTextY = 44;
+constexpr int16_t kDxRowsTop = kDxRowTextY - kDxRowPad;
+// The list region stops exactly at the bottom of the last row's glyphs, so a
+// scroll frame can never expose part of the row that is falling off the end.
+constexpr int16_t kDxRowsH = kDxRowPitch * (kMaxDxSpots - 1) + 16 + kDxRowPad;
+constexpr int16_t kDxColFreq = 14;
+constexpr int16_t kDxColCall = 82;
+constexpr int16_t kDxColMode = 170;
+constexpr int16_t kDxColTime = 230;
+
+// A new telnet spot pushes every row down one pitch. Rather than redrawing the
+// list in its new position, the incoming row plus the rows already on screen
+// are rendered once into a sprite one pitch taller than the visible region;
+// each frame then pushes a window of that sprite shifted by a few pixels.
+constexpr int16_t kDxScrollSpriteH = kDxRowsH + kDxRowPitch;
+constexpr int16_t kDxScrollStepPx = 3;
+constexpr uint32_t kDxScrollFrameMs = 10;
+
+// The list only uses four colours, so a 4-bit palette sprite reproduces them
+// exactly and costs a quarter of the RAM a 16-bit sprite would.
+constexpr uint8_t kDxPalBg = 0;
+constexpr uint8_t kDxPalText = 1;
+constexpr uint8_t kDxPalAccent = 2;
+constexpr uint8_t kDxPalMuted = 3;
+uint16_t g_dxScrollPalette[16] = {kBg, kText, kAccent, kMuted};
 constexpr uint8_t kIli9341Madctl = 0x36;
 // Base orientation for this board's known-good wiring (MX only, no row/column
 // exchange). MV genuinely swaps which physical axis is "wide", which is what
@@ -128,11 +161,30 @@ String g_lastGreySunLon;
 String g_lastGreyStatus;
 String g_lastGreyline;
 String g_lastGreyMap;
-String g_lastDxRows[kMaxDxSpots];
 String g_lastDxEmpty;
 String g_lastDxUpdated;
 String g_lastDxSource;
 String g_lastDxStatus;
+
+// The four fields of a DX row, already truncated to the widths that get drawn,
+// so comparing rows compares exactly what is on screen.
+struct DxRowText {
+  String freq;
+  String call;
+  String mode;
+  String time;
+};
+
+DxRowText g_dxShownRows[kMaxDxSpots];
+uint8_t g_dxShownCount = 0;
+bool g_dxScrollSpriteReady = false;
+bool g_dxScrollActive = false;
+int16_t g_dxScrollProgress = 0;
+uint32_t g_dxScrollFrameMs = 0;
+// The list the running scroll is animating towards; adopted as the shown rows
+// when it finishes.
+DxRowText g_dxScrollEndRows[kMaxDxSpots];
+uint8_t g_dxScrollEndCount = 0;
 
 char utcBuffer[16];
 char localBuffer[24];
@@ -213,8 +265,10 @@ void clearPageState() {
   g_lastGreyline = "";
   g_lastGreyMap = "";
   for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
-    g_lastDxRows[i] = "";
+    g_dxShownRows[i] = DxRowText();
   }
+  g_dxShownCount = 0;
+  g_dxScrollActive = false;
   g_lastDxEmpty = "";
   g_lastDxUpdated = "";
   g_lastDxSource = "";
@@ -666,18 +720,224 @@ String truncateText(const String& value, uint8_t maxLen) {
   return value.substring(0, maxLen);
 }
 
-void drawDxSpotRow(String& last, const DxSpot& spot, int16_t y) {
-  const String rowKey = spot.freq + "|" + spot.call + "|" + spot.mode + "|" + spot.time;
-  if (rowKey == last) {
+DxRowText makeDxRowText(const DxSpot& spot) {
+  DxRowText row;
+  row.freq = truncateText(spot.freq, 7);
+  row.call = truncateText(spot.call, 9);
+  row.mode = truncateText(spot.mode, 5);
+  row.time = truncateText(spot.time, 5);
+  return row;
+}
+
+bool sameDxRow(const DxRowText& a, const DxRowText& b) {
+  return a.freq == b.freq && a.call == b.call && a.mode == b.mode && a.time == b.time;
+}
+
+bool sameDxRowList(const DxRowText* a, uint8_t aCount, const DxRowText* b, uint8_t bCount) {
+  if (aCount != bCount) {
+    return false;
+  }
+  for (uint8_t i = 0; i < aCount; ++i) {
+    if (!sameDxRow(a[i], b[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Clears exactly the glyph box of one row. The 17px pitch leaves only a single
+// pixel between rows, so a taller clear would eat into its neighbour.
+void clearDxRowBand(int16_t y) {
+  tft.fillRect(kDxRowsX, y, kDxRowsW, tft.fontHeight(2), kBg);
+}
+
+void drawDxRowToTft(const DxRowText& row, int16_t y) {
+  clearDxRowBand(y);
+  drawLeft(row.freq, kDxColFreq, y, 2, kText);
+  drawLeft(row.call, kDxColCall, y, 2, kAccent);
+  drawLeft(row.mode, kDxColMode, y, 2, kText);
+  drawLeft(row.time, kDxColTime, y, 2, kMuted);
+}
+
+void drawDxRowToSprite(const DxRowText& row, int16_t y) {
+  dxScrollSprite.setTextDatum(TL_DATUM);
+  dxScrollSprite.setTextColor(kDxPalText, kDxPalBg);
+  dxScrollSprite.drawString(row.freq, kDxColFreq - kDxRowsX, y, 2);
+  dxScrollSprite.setTextColor(kDxPalAccent, kDxPalBg);
+  dxScrollSprite.drawString(row.call, kDxColCall - kDxRowsX, y, 2);
+  dxScrollSprite.setTextColor(kDxPalText, kDxPalBg);
+  dxScrollSprite.drawString(row.mode, kDxColMode - kDxRowsX, y, 2);
+  dxScrollSprite.setTextColor(kDxPalMuted, kDxPalBg);
+  dxScrollSprite.drawString(row.time, kDxColTime - kDxRowsX, y, 2);
+}
+
+bool ensureDxScrollSprite() {
+  if (g_dxScrollSpriteReady) {
+    return true;
+  }
+
+  dxScrollSprite.setColorDepth(4);
+  g_dxScrollSpriteReady = dxScrollSprite.createSprite(kDxRowsW, kDxScrollSpriteH) != nullptr;
+  if (!g_dxScrollSpriteReady) {
+    Serial.println("DX scroll sprite allocation failed");
+    return false;
+  }
+  dxScrollSprite.createPalette(g_dxScrollPalette, 16);
+  return true;
+}
+
+void releaseDxScrollSprite() {
+  if (!g_dxScrollSpriteReady) {
+    return;
+  }
+  dxScrollSprite.deleteSprite();
+  g_dxScrollSpriteReady = false;
+}
+
+// Pushes the visible window of the scroll sprite. Sprite rows are stored one
+// after another at 4 bits per pixel, so a vertical window is just a byte offset
+// into the buffer - no per-frame redraw of the text is needed.
+void pushDxScrollFrame(int16_t progress) {
+  const int32_t topRow = kDxRowPitch - progress;
+  uint8_t* buffer = static_cast<uint8_t*>(dxScrollSprite.getPointer());
+  if (buffer == nullptr) {
+    return;
+  }
+  tft.pushImage(kDxRowsX, kDxRowsTop, kDxRowsW, kDxRowsH,
+                buffer + ((topRow * kDxRowsW) >> 1), false, g_dxScrollPalette);
+}
+
+void finishDxScroll() {
+  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+    g_dxShownRows[i] = i < g_dxScrollEndCount ? g_dxScrollEndRows[i] : DxRowText();
+  }
+  g_dxShownCount = g_dxScrollEndCount;
+  g_dxScrollActive = false;
+}
+
+void stepDxScroll() {
+  if (!g_dxScrollActive) {
     return;
   }
 
-  tft.fillRect(10, y - 2, tft.width() - 20, tft.fontHeight(2) + 4, kBg);
-  drawLeft(truncateText(spot.freq, 7), 14, y, 2, kText);
-  drawLeft(truncateText(spot.call, 9), 82, y, 2, kAccent);
-  drawLeft(truncateText(spot.mode, 5), 170, y, 2, kText);
-  drawLeft(truncateText(spot.time, 5), 230, y, 2, kMuted);
-  last = rowKey;
+  const uint32_t nowMs = millis();
+  if (nowMs - g_dxScrollFrameMs < kDxScrollFrameMs) {
+    return;
+  }
+  g_dxScrollFrameMs = nowMs;
+
+  g_dxScrollProgress += kDxScrollStepPx;
+  if (g_dxScrollProgress > kDxRowPitch) {
+    g_dxScrollProgress = kDxRowPitch;
+  }
+  pushDxScrollFrame(g_dxScrollProgress);
+  if (g_dxScrollProgress == kDxRowPitch) {
+    // The last frame lands on the final layout, so the screen already matches
+    // the rows being adopted here.
+    finishDxScroll();
+  }
+}
+
+// Renders the incoming row above the rows currently on screen, then starts the
+// frame-by-frame push. Row n of the sprite ends up one pitch lower on screen
+// than row n-1 started, which is what makes the whole list appear to slide.
+bool startDxScroll(const DxRowText* rows, uint8_t count) {
+  if (!ensureDxScrollSprite()) {
+    return false;
+  }
+
+  dxScrollSprite.fillSprite(kDxPalBg);
+  drawDxRowToSprite(rows[0], kDxRowPad);
+  for (uint8_t i = 0; i < g_dxShownCount; ++i) {
+    drawDxRowToSprite(g_dxShownRows[i], kDxRowPad + (i + 1) * kDxRowPitch);
+  }
+
+  for (uint8_t i = 0; i < count; ++i) {
+    g_dxScrollEndRows[i] = rows[i];
+  }
+  g_dxScrollEndCount = count;
+  g_dxScrollProgress = 0;
+  g_dxScrollActive = true;
+  g_dxScrollFrameMs = millis() - kDxScrollFrameMs;
+  return true;
+}
+
+// True when the new list is the shown list pushed down by exactly one row,
+// which is what a single new telnet spot produces. A full JSON refresh replaces
+// several rows at once and is redrawn instantly instead.
+bool isSingleDxRowShift(const DxRowText* rows, uint8_t count) {
+  if (g_dxShownCount == 0) {
+    return false;
+  }
+  const uint8_t expected =
+      g_dxShownCount < kMaxDxSpots ? static_cast<uint8_t>(g_dxShownCount + 1) : kMaxDxSpots;
+  if (count != expected) {
+    return false;
+  }
+  for (uint8_t i = 0; i + 1 < count; ++i) {
+    if (!sameDxRow(rows[i + 1], g_dxShownRows[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void updateDxRows(const DxSpotsData& dx) {
+  if (dx.spotCount == 0) {
+    g_dxScrollActive = false;
+    drawCenteredField(g_lastDxEmpty, "No spots loaded", 92, 4, kMuted);
+    for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+      g_dxShownRows[i] = DxRowText();
+    }
+    g_dxShownCount = 0;
+    return;
+  }
+
+  if (g_lastDxEmpty.length() > 0) {
+    tft.fillRect(0, 78, tft.width(), 40, kBg);
+    g_lastDxEmpty = "";
+  }
+
+  const uint8_t count = dx.spotCount < kMaxDxSpots ? dx.spotCount : kMaxDxSpots;
+  DxRowText rows[kMaxDxSpots];
+  for (uint8_t i = 0; i < count; ++i) {
+    rows[i] = makeDxRowText(dx.spots[i]);
+  }
+
+  if (g_dxScrollActive) {
+    if (sameDxRowList(rows, count, g_dxScrollEndRows, g_dxScrollEndCount)) {
+      stepDxScroll();
+      return;
+    }
+    // A further spot landed mid-scroll. Snap to the end state and animate the
+    // new one from there rather than queueing frames behind a stale list.
+    finishDxScroll();
+  }
+
+  if (sameDxRowList(rows, count, g_dxShownRows, g_dxShownCount)) {
+    return;
+  }
+
+  if (isSingleDxRowShift(rows, count) && startDxScroll(rows, count)) {
+    stepDxScroll();
+    return;
+  }
+
+  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+    const int16_t y = kDxRowTextY + (i * kDxRowPitch);
+    if (i < count) {
+      if (!sameDxRow(rows[i], g_dxShownRows[i])) {
+        drawDxRowToTft(rows[i], y);
+      }
+    } else if (i < g_dxShownCount) {
+      clearDxRowBand(y);
+    }
+  }
+
+  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+    g_dxShownRows[i] = i < count ? rows[i] : DxRowText();
+  }
+  g_dxShownCount = count;
 }
 
 void drawFooter(const ClockSnapshot& snapshot) {
@@ -854,26 +1114,7 @@ void drawDxPage(const ClockSnapshot& snapshot) {
     drawLeft("UTC", 230, 24, 2, kMuted);
   }
 
-  if (dx.spotCount == 0) {
-    drawCenteredField(g_lastDxEmpty, "No spots loaded", 92, 4, kMuted);
-    for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
-      g_lastDxRows[i] = "";
-    }
-  } else {
-    if (g_lastDxEmpty.length() > 0) {
-      tft.fillRect(0, 78, tft.width(), 40, kBg);
-      g_lastDxEmpty = "";
-    }
-    for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
-      const int16_t y = 44 + (i * 17);
-      if (i < dx.spotCount) {
-        drawDxSpotRow(g_lastDxRows[i], dx.spots[i], y);
-      } else if (g_lastDxRows[i].length() > 0) {
-        tft.fillRect(10, y - 2, tft.width() - 20, tft.fontHeight(2) + 4, kBg);
-        g_lastDxRows[i] = "";
-      }
-    }
-  }
+  updateDxRows(dx);
 
   drawLeftField(g_lastDxUpdated, "Updated: " + dx.updated, 8, 186, 2, kMuted, 144);
   drawLeftField(g_lastDxSource, "Source: " + dx.provider, 158, 186, 2,
@@ -887,6 +1128,13 @@ void drawDxPage(const ClockSnapshot& snapshot) {
 }
 
 void drawCurrentPage(const ClockSnapshot& snapshot) {
+  if (g_currentPage != kPageDx) {
+    // Hand the scroll buffer back while it cannot be seen; the heap is shared
+    // with the TLS client used by the JSON refresh.
+    g_dxScrollActive = false;
+    releaseDxScrollSprite();
+  }
+
   switch (g_currentPage) {
     case kPageClock:
       drawClockPage(snapshot);
@@ -1063,6 +1311,10 @@ void displayUpdate(const ClockSnapshot& snapshot) {
   if (g_pageDirty || dataChanged || nowMs - g_lastRenderMs >= kRenderIntervalMs) {
     drawCurrentPage(snapshot);
     g_lastRenderMs = nowMs;
+  } else if (g_dxScrollActive) {
+    // Advance the DX list scroll between full page renders so the animation
+    // runs at its own pace without blocking touch or the telnet reader.
+    stepDxScroll();
   }
 }
 
