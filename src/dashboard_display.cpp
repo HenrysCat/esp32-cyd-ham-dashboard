@@ -787,6 +787,20 @@ void drawPskMap(const PskReporterData& psk) {
   }
 
   drawMapBackground();
+
+  // Night shading and the day/night line both go down before the markers, so
+  // reports stay at full brightness on top of them rather than being dimmed
+  // along with the map. Reception reports bunch along the terminator during
+  // greyline propagation, which is the point of showing it here. The shading
+  // pass costs a cos() for each of the 45000 pixels, but the subsolar point
+  // only moves once a minute, so this page redraws no more often than the
+  // Greyline page that has always carried the same cost.
+  const GreylineData& greyline = getGreylineData();
+  if (greyline.valid) {
+    drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+    drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+  }
+
   for (uint8_t i = 0; i < psk.reportCount; ++i) {
     const PskReport& report = psk.reports[i];
     drawPskMarker(report.latitude, report.longitude, report.bandIndex);
@@ -1378,8 +1392,12 @@ void drawPskPage(const ClockSnapshot& snapshot) {
     tft.fillScreen(kBg);
   }
 
+  // The subsolar position is part of the signature so the terminator keeps up
+  // with the sun rather than sitting still until the next report arrives.
+  const GreylineData& greyline = getGreylineData();
   const String mapSignature = psk.callsign + "|" + String(psk.reportCount) + "|" +
-                              String(psk.totalReports) + "|" + psk.updated + "|" + psk.status;
+                              String(psk.totalReports) + "|" + psk.updated + "|" + psk.status +
+                              "|" + greyline.sunLatitude + "|" + greyline.sunLongitude;
   if (mapSignature != g_lastPskMap) {
     drawPskMap(psk);
     g_lastPskMap = mapSignature;
