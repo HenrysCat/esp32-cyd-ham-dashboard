@@ -240,6 +240,18 @@ bool maidenheadToLatLon(const String& locatorInput, double& latitude, double& lo
   return true;
 }
 
+uint32_t greatCircleKm(double lat1, double lon1, double lat2, double lon2) {
+  constexpr double kEarthRadiusKm = 6371.0;
+  const double phi1 = lat1 * kRad;
+  const double phi2 = lat2 * kRad;
+  const double deltaPhi = (lat2 - lat1) * kRad;
+  const double deltaLambda = (lon2 - lon1) * kRad;
+
+  const double a = sin(deltaPhi / 2.0) * sin(deltaPhi / 2.0) +
+                   cos(phi1) * cos(phi2) * sin(deltaLambda / 2.0) * sin(deltaLambda / 2.0);
+  return static_cast<uint32_t>((kEarthRadiusKm * 2.0 * atan2(sqrt(a), sqrt(1.0 - a))) + 0.5);
+}
+
 void greylineBegin() {
   setInvalidData(getConfiguredLocator(), "Waiting for NTP");
 }

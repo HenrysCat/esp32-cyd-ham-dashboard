@@ -9,7 +9,9 @@
 #include "dashboard_display.h"
 #include "dx_spots.h"
 #include "greyline.h"
+#include "pota_spots.h"
 #include "propagation.h"
+#include "psk_reporter.h"
 #include "settings.h"
 
 namespace {
@@ -133,6 +135,11 @@ String statusJson() {
   json += uptimeText(snapshot.uptimeSeconds);
   json += F("\",\"free_heap\":");
   json += String(ESP.getFreeHeap());
+  // Largest single block available. Free heap can look healthy while this has
+  // fallen below what a sprite needs, which is what starves the scroll
+  // animation, so it is worth being able to see the two apart.
+  json += F(",\"max_alloc\":");
+  json += String(ESP.getMaxAllocHeap());
   json += F(",\"ntp\":");
   json += snapshot.timeValid ? F("true") : F("false");
   json += F(",\"page\":");
@@ -186,7 +193,7 @@ String pageHtml(const String& message = "") {
   html += String(ESP.getFreeHeap());
   html += F("</code></div><div>Current page: <code>");
   html += String(getCurrentDashboardPageNumber());
-  html += F("/5</code></div><div>Propagation: <code>");
+  html += F("/7</code></div><div>Propagation: <code>");
   html += htmlEscape(propagation.status);
   html += F("</code></div><div>DX: <code>");
   html += htmlEscape(dx.source);
@@ -278,7 +285,34 @@ String pageHtml(const String& message = "") {
   html += String(settings.propagationRefreshMinutes);
   html += F("'></div><div><label for='dxmins'>DX refresh minutes</label><input id='dxmins' name='dxmins' type='number' min='1' max='120' value='");
   html += String(settings.dxRefreshMinutes);
-  html += F("'></div></div></div><div class='card'><h2>Display</h2>");
+  html += F("'></div></div></div><div class='card'><h2>PSKReporter</h2>");
+  html += F("<small>Plots reception reports for your callsign on the world map. Uses the callsign set above; leave it blank to switch this page off.</small>");
+  html += F("<label for='pskdir'>Direction</label><select id='pskdir' name='pskdir'>");
+  html += F("<option value='heard'");
+  html += boolSelected(settings.pskDirection == kPskWhoHearsMe);
+  html += F(">Who is hearing me</option><option value='hearing'");
+  html += boolSelected(settings.pskDirection == kPskWhoIHear);
+  html += F(">Who I am hearing</option></select>");
+  html += F("<div class='grid'><div><label for='pskwin'>Report window minutes</label><input id='pskwin' name='pskwin' type='number' min='5' max='360' value='");
+  html += String(settings.pskWindowMinutes);
+  html += F("'></div><div><label for='pskmins'>PSKReporter refresh minutes</label><input id='pskmins' name='pskmins' type='number' min='5' max='120' value='");
+  html += String(settings.pskRefreshMinutes);
+  html += F("'></div></div><small>PSKReporter asks that reception data is retrieved no more than once every five minutes, so five is the lowest value accepted here.</small>");
+  html += F("<label for='pskmail'>Contact email (optional)</label><input id='pskmail' name='pskmail' maxlength='64' value='");
+  html += htmlEscape(settings.pskAppContact);
+  html += F("'><small>Sent to PSKReporter as <code>appcontact</code> so they can get in touch before rate limiting this device.</small>");
+  html += F("</div><div class='card'><h2>POTA</h2>");
+  html += F("<small>Live Parks on the Air activator spots from <code>api.pota.app</code>.</small>");
+  html += F("<div class='grid'><div><label for='potadist'>Max distance km</label><input id='potadist' name='potadist' type='number' min='0' max='20000' value='");
+  html += String(settings.potaMaxDistanceKm);
+  html += F("'><small>Great-circle distance from your locator. Use <code>0</code> for no limit.</small></div>");
+  html += F("<div><label for='potamins'>POTA refresh minutes</label><input id='potamins' name='potamins' type='number' min='1' max='120' value='");
+  html += String(settings.potaRefreshMinutes);
+  html += F("'></div></div>");
+  html += F("<label><input name='potarbn' type='checkbox' value='1'");
+  html += checked(settings.potaExcludeRbn);
+  html += F(">Hide RBN spots</label><small>RBN spots are posted automatically by skimmers rather than by a person. Hiding them leaves only human-posted spots.</small>");
+  html += F("</div><div class='card'><h2>Display</h2>");
   html += F("<label for='bright'>Backlight brightness percent</label><input id='bright' name='bright' type='number' min='5' max='100' value='");
   html += String(settings.brightnessPercent);
   html += F("'><label><input name='swaprb' type='checkbox' value='1'");
@@ -378,6 +412,18 @@ void handleSave() {
       constrain(server.arg("propmins").toInt(), 1L, 120L));
   settings.dxRefreshMinutes = static_cast<uint16_t>(
       constrain(server.arg("dxmins").toInt(), 1L, 120L));
+  settings.pskDirection =
+      server.arg("pskdir") == "hearing" ? kPskWhoIHear : kPskWhoHearsMe;
+  settings.pskWindowMinutes = static_cast<uint16_t>(
+      constrain(server.arg("pskwin").toInt(), 5L, 360L));
+  settings.pskRefreshMinutes = static_cast<uint16_t>(
+      constrain(server.arg("pskmins").toInt(), 5L, 120L));
+  settings.pskAppContact = limitedArg("pskmail", 64);
+  settings.potaMaxDistanceKm = static_cast<uint16_t>(
+      constrain(server.arg("potadist").toInt(), 0L, 20000L));
+  settings.potaRefreshMinutes = static_cast<uint16_t>(
+      constrain(server.arg("potamins").toInt(), 1L, 120L));
+  settings.potaExcludeRbn = server.hasArg("potarbn");
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
   settings.swapRedBlueChannels = server.hasArg("swaprb");
@@ -393,6 +439,8 @@ void handleSave() {
   requestPropagationRefresh();
   requestDxSpotsRefresh();
   requestGreylineRefresh();
+  requestPskReporterRefresh();
+  requestPotaSpotsRefresh();
 
   if (settings.wifiSsid != previousSettings.wifiSsid ||
       settings.wifiPassword != previousSettings.wifiPassword) {

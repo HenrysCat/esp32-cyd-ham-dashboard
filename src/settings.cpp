@@ -20,6 +20,15 @@ constexpr char kDefaultDxTelnetHost[] = "dxspots.com";
 constexpr uint16_t kDefaultDxTelnetPort = 7300;
 constexpr uint16_t kDefaultPropagationRefreshMinutes = 15;
 constexpr uint16_t kDefaultDxRefreshMinutes = 5;
+// PSKReporter asks for no more than one query every five minutes, so that is
+// both the default and the lowest value the settings page will accept.
+constexpr uint16_t kMinPskRefreshMinutes = 5;
+constexpr uint16_t kDefaultPskRefreshMinutes = 5;
+constexpr uint16_t kDefaultPskWindowMinutes = 60;
+// POTA publishes no formal rate limit; a minute is the interval existing
+// client libraries settle on, so it is the lowest value offered here.
+constexpr uint16_t kMinPotaRefreshMinutes = 1;
+constexpr uint16_t kDefaultPotaRefreshMinutes = 5;
 constexpr uint8_t kDefaultBrightnessPercent = 100;
 
 #ifndef ROTATE90_DEFAULT
@@ -91,6 +100,7 @@ void normalizeSettings(AppSettings& settings) {
   settings.propagationJsonUrl = limitedString(settings.propagationJsonUrl, 180);
   settings.dxSpotsUrl = limitedString(settings.dxSpotsUrl, 180);
   settings.dxTelnetHost = limitedString(settings.dxTelnetHost, 64);
+  settings.pskAppContact = limitedString(settings.pskAppContact, 64);
 
   if (settings.timezone.length() == 0) {
     settings.timezone = kDefaultTimezone;
@@ -120,6 +130,21 @@ void normalizeSettings(AppSettings& settings) {
   settings.dxRefreshMinutes =
       constrain(settings.dxRefreshMinutes, static_cast<uint16_t>(1),
                 static_cast<uint16_t>(120));
+  if (settings.pskDirection != kPskWhoHearsMe && settings.pskDirection != kPskWhoIHear) {
+    settings.pskDirection = kPskWhoHearsMe;
+  }
+  settings.pskWindowMinutes =
+      constrain(settings.pskWindowMinutes, static_cast<uint16_t>(5),
+                static_cast<uint16_t>(360));
+  settings.pskRefreshMinutes =
+      constrain(settings.pskRefreshMinutes, kMinPskRefreshMinutes, static_cast<uint16_t>(120));
+  settings.potaRefreshMinutes =
+      constrain(settings.potaRefreshMinutes, kMinPotaRefreshMinutes, static_cast<uint16_t>(120));
+  // Zero is meaningful here - it disables the distance filter - so only the
+  // upper bound is clamped.
+  if (settings.potaMaxDistanceKm > 20000) {
+    settings.potaMaxDistanceKm = 20000;
+  }
   settings.brightnessPercent =
       constrain(settings.brightnessPercent, static_cast<uint8_t>(5),
                 static_cast<uint8_t>(100));
@@ -151,6 +176,15 @@ void settingsBegin() {
   currentSettings.propagationRefreshMinutes =
       preferences.getUShort("propmins", kDefaultPropagationRefreshMinutes);
   currentSettings.dxRefreshMinutes = preferences.getUShort("dxmins", kDefaultDxRefreshMinutes);
+  currentSettings.pskDirection = static_cast<PskDirection>(
+      preferences.getUChar("pskdir", static_cast<uint8_t>(kPskWhoHearsMe)));
+  currentSettings.pskWindowMinutes = preferences.getUShort("pskwin", kDefaultPskWindowMinutes);
+  currentSettings.pskRefreshMinutes = preferences.getUShort("pskmins", kDefaultPskRefreshMinutes);
+  currentSettings.pskAppContact = preferences.getString("pskmail", "");
+  currentSettings.potaRefreshMinutes =
+      preferences.getUShort("potamins", kDefaultPotaRefreshMinutes);
+  currentSettings.potaMaxDistanceKm = preferences.getUShort("potadist", 0);
+  currentSettings.potaExcludeRbn = preferences.getBool("potarbn", false);
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
@@ -185,6 +219,13 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("dxport", currentSettings.dxTelnetPort);
   preferences.putUShort("propmins", currentSettings.propagationRefreshMinutes);
   preferences.putUShort("dxmins", currentSettings.dxRefreshMinutes);
+  preferences.putUChar("pskdir", static_cast<uint8_t>(currentSettings.pskDirection));
+  preferences.putUShort("pskwin", currentSettings.pskWindowMinutes);
+  preferences.putUShort("pskmins", currentSettings.pskRefreshMinutes);
+  preferences.putString("pskmail", currentSettings.pskAppContact);
+  preferences.putUShort("potamins", currentSettings.potaRefreshMinutes);
+  preferences.putUShort("potadist", currentSettings.potaMaxDistanceKm);
+  preferences.putBool("potarbn", currentSettings.potaExcludeRbn);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
   preferences.putBool("rot90", currentSettings.rotate90);

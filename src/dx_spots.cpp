@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "app_config.h"
+#include "connectivity.h"
 #include "settings.h"
 
 #ifndef DX_SPOTS_URL
@@ -24,6 +25,11 @@ namespace {
 constexpr uint32_t kHttpTimeoutMs = 5000;
 constexpr size_t kMaxDxObjectChars = 4096;
 constexpr uint32_t kTelnetReconnectIntervalMs = 30000;
+// A cluster socket can die without a FIN (a NAT table dropping it, for
+// instance), leaving a connection that looks fine and never delivers again.
+// Silence for this long is treated as dead so it gets reconnected, and so Auto
+// mode goes back to backfilling from JSON meanwhile.
+constexpr uint32_t kTelnetStaleMs = 600000;
 constexpr uint32_t kTelnetLoginDelayMs = 1500;
 constexpr int32_t kTelnetConnectTimeoutMs = 5000;
 constexpr size_t kMaxTelnetLineChars = 180;
@@ -51,7 +57,9 @@ bool g_telnetLineOverflow = false;
 bool g_telnetConnected = false;
 bool g_telnetLoggedIn = false;
 bool g_telnetHasCurrentSpots = false;
-bool g_autoUsingTelnet = false;
+// Whether Auto has already had a go at the JSON backfill that fills the list
+// before Telnet starts adding to it.
+bool g_autoBackfillTried = false;
 uint32_t g_lastTelnetConnectAttemptMs = 0;
 uint32_t g_telnetConnectedAtMs = 0;
 uint32_t g_lastTelnetDataMs = 0;
@@ -117,6 +125,17 @@ String jsonProviderName() {
 
 String telnetProviderName() {
   return providerNameFromAddress(getSettings().dxTelnetHost);
+}
+
+// Empties the list. Used at startup and when the source mode changes, so a
+// deliberate switch of source never leaves the previous source's spots on
+// screen labelled as the new one.
+void resetDxData() {
+  g_data = DxSpotsData();
+  g_data.status = "Waiting";
+  g_data.updated = "--";
+  g_data.source = "--";
+  g_data.provider = "--";
 }
 
 String isoTimeToDisplay(String iso) {
@@ -201,7 +220,7 @@ String deriveMode(const String& freq, const String& comment) {
 bool beginHttp(const String& url, HTTPClient& http, WiFiClient& plainClient,
                WiFiClientSecure& secureClient) {
   if (url.startsWith("https://")) {
-    secureClient.setInsecure();
+    configureSecureClient(secureClient);
     return http.begin(secureClient, url);
   }
   return http.begin(plainClient, url);
@@ -330,6 +349,16 @@ bool isDuplicateDxSpot(const DxSpot& spot) {
 }
 
 void setTelnetStatus(const String& status) {
+  // In Auto the page shows whichever list is actually up, which is the JSON
+  // backfill until Telnet delivers its first spot. Connection chatter from a
+  // Telnet session that has contributed nothing must not relabel that list as
+  // failed, which is what made a working JSON list read as "Failed" while the
+  // cluster was unreachable.
+  if (getSettings().dxSourceMode == kDxSourceAuto && !g_telnetHasCurrentSpots &&
+      g_data.hasData) {
+    return;
+  }
+
   g_data.status = status;
   g_data.provider = telnetProviderName();
   if (g_telnetHasCurrentSpots) {
@@ -393,10 +422,11 @@ bool addDxSpotToList(const DxSpot& spot) {
     return false;
   }
 
-  if (!g_telnetHasCurrentSpots) {
-    g_data = DxSpotsData();
-    g_telnetHasCurrentSpots = true;
-  }
+  // Telnet spots push onto whatever is already listed rather than replacing it,
+  // so in Auto mode a live connection adds to the JSON backfill instead of
+  // emptying the page and refilling it one spot at a time. isDuplicateDxSpot
+  // stops an overlapping backfill from listing the same spot twice.
+  g_telnetHasCurrentSpots = true;
 
   const uint8_t last = min<uint8_t>(g_data.spotCount, kMaxDxSpots - 1);
   for (uint8_t i = last; i > 0; --i) {
@@ -546,6 +576,14 @@ bool loopDxTelnet() {
     g_telnetHasCurrentSpots = false;
     g_lastTelnetConnectAttemptMs = nowMs;
     setTelnetStatus("Disconnected");
+    changed = true;
+  }
+
+  if (g_telnetConnected && nowMs - g_lastTelnetDataMs >= kTelnetStaleMs) {
+    Serial.println("DX Telnet stalled, reconnecting");
+    stopDxTelnet(false);
+    g_telnetHasCurrentSpots = false;
+    setTelnetStatus("Stalled");
     changed = true;
   }
 
@@ -792,15 +830,11 @@ bool fetchDxSpots() {
 }
 
 void dxSpotsBegin() {
-  g_data = DxSpotsData();
-  g_data.status = "Waiting";
-  g_data.updated = "--";
-  g_data.source = "--";
-  g_data.provider = "--";
+  resetDxData();
   g_telnetLineBuffer.reserve(kMaxTelnetLineChars);
   g_lastSourceMode = 0xFF;
-  g_autoUsingTelnet = false;
   g_telnetHasCurrentSpots = false;
+  g_autoBackfillTried = false;
   stopDxTelnet(true);
   g_refreshRequested = true;
 }
@@ -825,7 +859,8 @@ bool refreshDxSpotsIfNeeded(bool wifiConnected) {
   if (g_lastSourceMode != static_cast<uint8_t>(mode)) {
     stopDxTelnet(true);
     g_telnetHasCurrentSpots = false;
-    g_autoUsingTelnet = false;
+    g_autoBackfillTried = false;
+    resetDxData();
     g_lastAttemptMs = 0;
     g_refreshRequested = true;
     g_lastSourceMode = static_cast<uint8_t>(mode);
@@ -864,35 +899,42 @@ bool refreshDxSpotsIfNeeded(bool wifiConnected) {
     return loopDxTelnet() || changed;
   }
 
-  if (g_refreshRequested || due) {
-    const bool telnetWasActive = g_autoUsingTelnet && g_telnetConnected;
-    // A manual refresh tap re-tries JSON in case it's back, but if Telnet is
-    // already connected and working it should be left alone: tearing it down
-    // here only to reconnect from scratch means it never gets an
-    // uninterrupted window to actually receive spots from the cluster.
-    const bool reconnectFallback = g_refreshRequested && !telnetWasActive;
-    g_lastAttemptMs = nowMs;
-    g_refreshRequested = false;
-    if (fetchDxSpots()) {
-      g_autoUsingTelnet = false;
-      g_telnetHasCurrentSpots = false;
-      stopDxTelnet(true);
-      return true;
-    }
+  // Auto backfills from JSON, then hands the list to Telnet and leaves it
+  // alone. JSON returns a full list in one request, so the page is useful
+  // seconds after boot; Telnet then delivers spots live, one at a time.
+  // Telnet is never torn down to re-poll JSON, because "connected but quiet" is
+  // indistinguishable from a quiet band and switching back would cost the live
+  // feed for nothing.
+  const bool telnetLive = g_telnetConnected && g_telnetHasCurrentSpots;
+  const bool manual = g_refreshRequested;
+  g_refreshRequested = false;
 
-    g_autoUsingTelnet = true;
-    if (reconnectFallback) {
-      stopDxTelnet(true);
-      g_telnetHasCurrentSpots = false;
-    } else if (telnetWasActive) {
-      setTelnetStatus("Reading");
+  // Telnet does not start until JSON has had its go, otherwise a cluster that
+  // connects quickly wins the race and the list starts from a single spot and
+  // trickles instead of arriving full.
+  if (!g_autoBackfillTried) {
+    if (!manual && !due) {
+      return changed;
     }
+    g_lastAttemptMs = nowMs;
+    g_autoBackfillTried = true;
+    fetchDxSpots();
+    return true;
+  }
+
+  if (!telnetLive && (manual || due)) {
+    // Keeps retrying on the refresh interval while Telnet has yet to deliver,
+    // so a cluster that stays silent still leaves a current list on screen.
+    g_lastAttemptMs = nowMs;
+    fetchDxSpots();
+    changed = true;
+  } else if (manual) {
+    // Nothing useful to re-fetch: the list is already live.
+    setTelnetStatus("Reading");
     changed = true;
   }
 
-  if (g_autoUsingTelnet) {
-    changed |= loopDxTelnet();
-  }
+  changed |= loopDxTelnet();
   return changed;
 }
 

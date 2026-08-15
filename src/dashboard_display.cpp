@@ -9,7 +9,9 @@
 #include "dx_spots.h"
 #include "greyline.h"
 #include "greyline_map.h"
+#include "pota_spots.h"
 #include "propagation.h"
+#include "psk_reporter.h"
 #include "settings.h"
 
 namespace {
@@ -23,7 +25,9 @@ enum DashboardPage : uint8_t {
   kPagePropagation,
   kPageVhf,
   kPageGreyline,
+  kPagePsk,
   kPageDx,
+  kPagePota,
   kPageCount
 };
 
@@ -84,6 +88,13 @@ constexpr int16_t kDxColCall = 82;
 constexpr int16_t kDxColMode = 170;
 constexpr int16_t kDxColTime = 230;
 
+// POTA reuses the DX row geometry, but trades the time column for the park
+// reference, which is what a hunter needs in order to log the contact.
+// POTA shares these columns and the whole row and scroll mechanism, trading
+// only the time column for the park reference, which is what a hunter needs in
+// order to log the contact. Eight-character references such as US-10473 end
+// around x=306, inside the row band, so no separate layout is needed.
+
 // A new telnet spot pushes every row down one pitch. Rather than redrawing the
 // list in its new position, the incoming row plus the rows already on screen
 // are rendered once into a sprite one pitch taller than the visible region;
@@ -91,6 +102,10 @@ constexpr int16_t kDxColTime = 230;
 constexpr int16_t kDxScrollSpriteH = kDxRowsH + kDxRowPitch;
 constexpr int16_t kDxScrollStepPx = 3;
 constexpr uint32_t kDxScrollFrameMs = 10;
+// A JSON refresh arrives as a batch of several new spots. They are held and
+// scrolled in one at a time, with this pause between them so each arrival
+// reads as its own event rather than one long blur.
+constexpr uint32_t kDxQueueGapMs = 200;
 
 // The list only uses four colours, so a 4-bit palette sprite reproduces them
 // exactly and costs a quarter of the RAM a 16-bit sprite would.
@@ -161,10 +176,17 @@ String g_lastGreySunLon;
 String g_lastGreyStatus;
 String g_lastGreyline;
 String g_lastGreyMap;
+String g_lastPskMap;
+String g_lastPskHeading;
+String g_lastPskBest;
+String g_lastPskFooterLine;
 String g_lastDxEmpty;
 String g_lastDxUpdated;
 String g_lastDxSource;
 String g_lastDxStatus;
+String g_lastPotaUpdated;
+String g_lastPotaStatus;
+String g_lastPotaEmpty;
 
 // The four fields of a DX row, already truncated to the widths that get drawn,
 // so comparing rows compares exactly what is on screen.
@@ -185,6 +207,15 @@ uint32_t g_dxScrollFrameMs = 0;
 // when it finishes.
 DxRowText g_dxScrollEndRows[kMaxDxSpots];
 uint8_t g_dxScrollEndCount = 0;
+
+// New spots waiting their turn to scroll in, oldest first, plus the list the
+// whole sequence ends on.
+DxRowText g_dxQueueRows[kMaxDxSpots];
+uint8_t g_dxQueueCount = 0;
+uint8_t g_dxQueueIndex = 0;
+DxRowText g_dxQueueTargetRows[kMaxDxSpots];
+uint8_t g_dxQueueTargetCount = 0;
+uint32_t g_dxQueueReadyMs = 0;
 
 char utcBuffer[16];
 char localBuffer[24];
@@ -264,15 +295,25 @@ void clearPageState() {
   g_lastGreyStatus = "";
   g_lastGreyline = "";
   g_lastGreyMap = "";
+  g_lastPskMap = "";
+  g_lastPskHeading = "";
+  g_lastPskBest = "";
+  g_lastPskFooterLine = "";
   for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
     g_dxShownRows[i] = DxRowText();
   }
   g_dxShownCount = 0;
   g_dxScrollActive = false;
+  g_dxQueueCount = 0;
+  g_dxQueueIndex = 0;
+  g_dxQueueTargetCount = 0;
   g_lastDxEmpty = "";
   g_lastDxUpdated = "";
   g_lastDxSource = "";
   g_lastDxStatus = "";
+  g_lastPotaUpdated = "";
+  g_lastPotaStatus = "";
+  g_lastPotaEmpty = "";
 }
 
 void drawCentered(const String& text, int16_t y, uint8_t font, uint16_t color = kText) {
@@ -592,6 +633,20 @@ bool ensureMapSprite() {
   return g_mapSpriteReady;
 }
 
+// The map sprite is 90KB, and holding it for the life of the run leaves no
+// contiguous block large enough for a TLS handshake, so every HTTPS fetch
+// starts failing once a map page has been visited. It is only actually needed
+// while a frame is being composed, so it is handed straight back after the
+// push. Nothing is allocated between the create and the release, so the same
+// block is simply reused each time rather than fragmenting the heap.
+void releaseMapSprite() {
+  if (!g_mapSpriteReady) {
+    return;
+  }
+  mapSprite.deleteSprite();
+  g_mapSpriteReady = false;
+}
+
 void latLonToMapXY(double latitude, double longitude, int16_t& x, int16_t& y) {
   longitude = constrain(longitude, -180.0, 180.0);
   latitude = constrain(latitude, -90.0, 90.0);
@@ -711,6 +766,72 @@ void drawGreylineMap(const GreylineData& greyline) {
     drawSunMarker(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
   }
   mapSprite.pushSprite(kMapX, kMapY);
+  releaseMapSprite();
+}
+
+// Reception reports are plotted with a dark halo so that the pale band colours
+// stay visible over the light land and ocean pixels of the map image.
+void drawPskMarker(double latitude, double longitude, uint8_t bandIndex) {
+  int16_t x;
+  int16_t y;
+  latLonToMapXY(latitude, longitude, x, y);
+  mapSprite.drawCircle(x, y, 2, TFT_BLACK);
+  mapSprite.fillCircle(x, y, 1, pskBandColor(bandIndex));
+}
+
+void drawPskMap(const PskReporterData& psk) {
+  if (!ensureMapSprite()) {
+    tft.fillRect(kMapX, kMapY, kMapW, kMapH, kBg);
+    tft.drawRect(kMapX, kMapY, kMapW, kMapH, kPanel);
+    return;
+  }
+
+  drawMapBackground();
+  for (uint8_t i = 0; i < psk.reportCount; ++i) {
+    const PskReport& report = psk.reports[i];
+    drawPskMarker(report.latitude, report.longitude, report.bandIndex);
+  }
+
+  double qthLat;
+  double qthLon;
+  if (getConfiguredLatitude(qthLat) && getConfiguredLongitude(qthLon)) {
+    drawQthMarker(qthLat, qthLon);
+  }
+  mapSprite.pushSprite(kMapX, kMapY);
+  releaseMapSprite();
+}
+
+// Names only the bands that actually appear in the current reports, each drawn
+// in the colour its markers use, so the map needs no separate key.
+void drawPskBandLegend(const PskReporterData& psk, int16_t y) {
+  const int16_t rowTop = y - 2;
+  const int16_t rowHeight = tft.fontHeight(1) + 4;
+  tft.fillRect(8, rowTop, tft.width() - 16, rowHeight, kBg);
+
+  if (psk.status != "OK") {
+    drawLeft("Status: " + psk.status, 14, y, 1, kWarn);
+    return;
+  }
+  if (psk.bandMask == 0) {
+    drawLeft("Bands: --", 14, y, 1, kMuted);
+    return;
+  }
+
+  int16_t x = 14;
+  drawLeft("Bands:", x, y, 1, kMuted);
+  x += tft.textWidth("Bands:", 1) + 6;
+  for (uint8_t band = 0; band < pskBandCount(); ++band) {
+    if ((psk.bandMask & static_cast<uint16_t>(1u << band)) == 0) {
+      continue;
+    }
+    const String label = pskBandLabel(band);
+    const int16_t width = tft.textWidth(label, 1);
+    if (x + width > tft.width() - 14) {
+      break;
+    }
+    drawLeft(label, x, y, 1, pskBandColor(band));
+    x += width + 7;
+  }
 }
 
 String truncateText(const String& value, uint8_t maxLen) {
@@ -786,12 +907,21 @@ bool ensureDxScrollSprite() {
   return true;
 }
 
-void releaseDxScrollSprite() {
-  if (!g_dxScrollSpriteReady) {
-    return;
-  }
-  dxScrollSprite.deleteSprite();
-  g_dxScrollSpriteReady = false;
+// The scroll sprite is claimed once at startup and never handed back. Releasing
+// it between pages used to look like good housekeeping, but the heap it was
+// returned to is churned by the TLS clients behind four periodic fetches, and
+// after a while no contiguous 23KB block was left. Every scroll then fell back
+// to an instant redraw and the animation silently stopped for good.
+//
+// Only this sprite is reserved. The map sprite is left to allocate on demand:
+// taking its 90KB up front splits the ESP32's segmented DRAM badly enough that
+// TLS can no longer find a contiguous block and every HTTPS fetch fails.
+void reserveDisplaySprites() {
+  ensureDxScrollSprite();
+  Serial.print("Scroll sprite reserved. Free heap: ");
+  Serial.print(ESP.getFreeHeap());
+  Serial.print(", largest block: ");
+  Serial.println(ESP.getMaxAllocHeap());
 }
 
 // Pushes the visible window of the scroll sprite. Sprite rows are stored one
@@ -813,6 +943,8 @@ void finishDxScroll() {
   }
   g_dxShownCount = g_dxScrollEndCount;
   g_dxScrollActive = false;
+  // Starts the gap before the next queued row, if any.
+  g_dxQueueReadyMs = millis();
 }
 
 void stepDxScroll() {
@@ -862,29 +994,163 @@ bool startDxScroll(const DxRowText* rows, uint8_t count) {
   return true;
 }
 
-// True when the new list is the shown list pushed down by exactly one row,
-// which is what a single new telnet spot produces. A full JSON refresh replaces
-// several rows at once and is redrawn instantly instead.
-bool isSingleDxRowShift(const DxRowText* rows, uint8_t count) {
+// How many rows the new list has pushed onto the top of the shown list: 1 for a
+// single telnet spot, more for a JSON batch. Returns -1 when the new list is not
+// the shown list pushed down (rows reordered or edited in place), which has to
+// be redrawn rather than scrolled.
+int8_t dxRowShiftCount(const DxRowText* rows, uint8_t count) {
   if (g_dxShownCount == 0) {
-    return false;
+    return -1;
   }
-  const uint8_t expected =
-      g_dxShownCount < kMaxDxSpots ? static_cast<uint8_t>(g_dxShownCount + 1) : kMaxDxSpots;
-  if (count != expected) {
-    return false;
-  }
-  for (uint8_t i = 0; i + 1 < count; ++i) {
-    if (!sameDxRow(rows[i + 1], g_dxShownRows[i])) {
-      return false;
+
+  // The smallest shift that lines the two lists up is the real one; a larger
+  // shift would match too by simply pushing the overlap off the bottom.
+  for (uint8_t shift = 0; shift <= count; ++shift) {
+    const uint8_t overlap = count - shift;
+    if (overlap > g_dxShownCount) {
+      continue;
+    }
+    bool matches = true;
+    for (uint8_t i = 0; i < overlap; ++i) {
+      if (!sameDxRow(rows[shift + i], g_dxShownRows[i])) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return static_cast<int8_t>(shift);
     }
   }
+  return -1;
+}
+
+void clearDxQueue() {
+  g_dxQueueCount = 0;
+  g_dxQueueIndex = 0;
+  g_dxQueueTargetCount = 0;
+}
+
+bool dxQueuePending() {
+  return g_dxQueueIndex < g_dxQueueCount;
+}
+
+// Holds the new rows back so they can be shown one at a time. They are queued
+// oldest first, so the newest spot is the last to slide in and ends up on top.
+void startDxQueue(const DxRowText* rows, uint8_t count, uint8_t shift) {
+  for (uint8_t i = 0; i < shift; ++i) {
+    g_dxQueueRows[i] = rows[shift - 1 - i];
+  }
+  g_dxQueueCount = shift;
+  g_dxQueueIndex = 0;
+  for (uint8_t i = 0; i < count; ++i) {
+    g_dxQueueTargetRows[i] = rows[i];
+  }
+  g_dxQueueTargetCount = count;
+  // Let the first row start straight away; the gap applies between rows.
+  g_dxQueueReadyMs = millis() - kDxQueueGapMs;
+}
+
+void applyDxRowsInstantly(const DxRowText* rows, uint8_t count) {
+  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+    const int16_t y = kDxRowTextY + (i * kDxRowPitch);
+    if (i < count) {
+      if (!sameDxRow(rows[i], g_dxShownRows[i])) {
+        drawDxRowToTft(rows[i], y);
+      }
+    } else if (i < g_dxShownCount) {
+      clearDxRowBand(y);
+    }
+  }
+
+  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+    g_dxShownRows[i] = i < count ? rows[i] : DxRowText();
+  }
+  g_dxShownCount = count;
+}
+
+// Drives whatever the list is currently doing: stepping a scroll, waiting out
+// the gap, or starting the next queued row. False means nothing is animating
+// and the caller should put the list up without it.
+bool serviceDxQueue() {
+  if (g_dxScrollActive) {
+    stepDxScroll();
+    return true;
+  }
+  if (!dxQueuePending()) {
+    return false;
+  }
+  if (millis() - g_dxQueueReadyMs < kDxQueueGapMs) {
+    return true;
+  }
+
+  // Each queued row is a one-row shift of what is on screen, which is exactly
+  // what the scroll animates.
+  DxRowText next[kMaxDxSpots];
+  next[0] = g_dxQueueRows[g_dxQueueIndex];
+  uint8_t count = 1;
+  for (uint8_t i = 0; i < g_dxShownCount && count < kMaxDxSpots; ++i) {
+    next[count++] = g_dxShownRows[i];
+  }
+
+  if (!startDxScroll(next, count)) {
+    return false;
+  }
+  ++g_dxQueueIndex;
+  stepDxScroll();
   return true;
+}
+
+void finishDxQueueInstantly() {
+  if (g_dxQueueTargetCount > 0) {
+    applyDxRowsInstantly(g_dxQueueTargetRows, g_dxQueueTargetCount);
+  }
+  clearDxQueue();
+}
+
+// Works out whether the incoming list is the old one shifted down, and if so
+// animates it in a row at a time; otherwise redraws. Shared by both spot pages
+// - only one of them can be on screen, so they share this row state too.
+void applyRowList(const DxRowText* rows, uint8_t count) {
+  // A sequence already heading for this list just needs to keep running.
+  if (dxQueuePending() && sameDxRowList(rows, count, g_dxQueueTargetRows, g_dxQueueTargetCount)) {
+    if (!serviceDxQueue()) {
+      finishDxQueueInstantly();
+    }
+    return;
+  }
+
+  if (g_dxScrollActive) {
+    if (!dxQueuePending() && sameDxRowList(rows, count, g_dxScrollEndRows, g_dxScrollEndCount)) {
+      stepDxScroll();
+      return;
+    }
+    // Spots landed while the list was still moving. Snap to where the current
+    // scroll was going and start again from there rather than queueing frames
+    // behind a stale list.
+    finishDxScroll();
+  }
+  clearDxQueue();
+
+  if (sameDxRowList(rows, count, g_dxShownRows, g_dxShownCount)) {
+    return;
+  }
+
+  const int8_t shift = dxRowShiftCount(rows, count);
+  if (shift >= 1) {
+    startDxQueue(rows, count, static_cast<uint8_t>(shift));
+    if (serviceDxQueue()) {
+      return;
+    }
+    clearDxQueue();
+  }
+
+  applyDxRowsInstantly(rows, count);
 }
 
 void updateDxRows(const DxSpotsData& dx) {
   if (dx.spotCount == 0) {
     g_dxScrollActive = false;
+    clearDxQueue();
     drawCenteredField(g_lastDxEmpty, "No spots loaded", 92, 4, kMuted);
     for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
       g_dxShownRows[i] = DxRowText();
@@ -903,41 +1169,43 @@ void updateDxRows(const DxSpotsData& dx) {
   for (uint8_t i = 0; i < count; ++i) {
     rows[i] = makeDxRowText(dx.spots[i]);
   }
+  applyRowList(rows, count);
+}
 
-  if (g_dxScrollActive) {
-    if (sameDxRowList(rows, count, g_dxScrollEndRows, g_dxScrollEndCount)) {
-      stepDxScroll();
-      return;
+// The park reference takes the slot the DX list uses for time, so POTA spots
+// flow through exactly the same row and scroll machinery.
+DxRowText makePotaRowText(const PotaSpot& spot) {
+  DxRowText row;
+  row.freq = truncateText(spot.frequency, 7);
+  row.call = truncateText(spot.activator, 9);
+  row.mode = truncateText(spot.mode, 4);
+  row.time = truncateText(spot.reference, 8);
+  return row;
+}
+
+void updatePotaRows(const PotaSpotsData& pota) {
+  if (pota.spotCount == 0) {
+    g_dxScrollActive = false;
+    clearDxQueue();
+    drawCenteredField(g_lastPotaEmpty, "No spots loaded", 92, 4, kMuted);
+    for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
+      g_dxShownRows[i] = DxRowText();
     }
-    // A further spot landed mid-scroll. Snap to the end state and animate the
-    // new one from there rather than queueing frames behind a stale list.
-    finishDxScroll();
-  }
-
-  if (sameDxRowList(rows, count, g_dxShownRows, g_dxShownCount)) {
+    g_dxShownCount = 0;
     return;
   }
 
-  if (isSingleDxRowShift(rows, count) && startDxScroll(rows, count)) {
-    stepDxScroll();
-    return;
+  if (g_lastPotaEmpty.length() > 0) {
+    tft.fillRect(0, 78, tft.width(), 40, kBg);
+    g_lastPotaEmpty = "";
   }
 
-  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
-    const int16_t y = kDxRowTextY + (i * kDxRowPitch);
-    if (i < count) {
-      if (!sameDxRow(rows[i], g_dxShownRows[i])) {
-        drawDxRowToTft(rows[i], y);
-      }
-    } else if (i < g_dxShownCount) {
-      clearDxRowBand(y);
-    }
+  const uint8_t count = pota.spotCount < kMaxDxSpots ? pota.spotCount : kMaxDxSpots;
+  DxRowText rows[kMaxDxSpots];
+  for (uint8_t i = 0; i < count; ++i) {
+    rows[i] = makePotaRowText(pota.spots[i]);
   }
-
-  for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
-    g_dxShownRows[i] = i < count ? rows[i] : DxRowText();
-  }
-  g_dxShownCount = count;
+  applyRowList(rows, count);
 }
 
 void drawFooter(const ClockSnapshot& snapshot) {
@@ -1102,6 +1370,50 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
   drawFooter(snapshot);
 }
 
+void drawPskPage(const ClockSnapshot& snapshot) {
+  const PskReporterData& psk = getPskReporterData();
+  const AppSettings& settings = getSettings();
+
+  if (g_pageDirty) {
+    tft.fillScreen(kBg);
+  }
+
+  const String mapSignature = psk.callsign + "|" + String(psk.reportCount) + "|" +
+                              String(psk.totalReports) + "|" + psk.updated + "|" + psk.status;
+  if (mapSignature != g_lastPskMap) {
+    drawPskMap(psk);
+    g_lastPskMap = mapSignature;
+  }
+
+  String heading;
+  if (psk.callsign.length() == 0) {
+    heading = "Set your callsign on the web settings page";
+  } else {
+    heading = psk.callsign + (settings.pskDirection == kPskWhoIHear ? " hears " : " heard by ");
+    heading += String(psk.reportCount) + " grids / " + String(psk.totalReports) + " rpts";
+    heading += ", last " + String(settings.pskWindowMinutes) + "m";
+  }
+  drawLeftField(g_lastPskHeading, heading, 14, 160, 1, kText, 292);
+
+  String bestLine;
+  if (psk.bestDistanceKm > 0) {
+    bestLine = "Best: " + psk.bestCallsign + " " + psk.bestLocator + " " +
+               String(psk.bestDistanceKm) + " km";
+  } else {
+    bestLine = "Best: --";
+  }
+  bestLine += "   Upd " + (psk.updated.length() > 0 ? psk.updated.substring(0, 5) : String("--"));
+  drawLeftField(g_lastPskBest, bestLine, 14, 178, 1, psk.bestDistanceKm > 0 ? kAccent : kMuted,
+                292);
+
+  const String legendSignature = String(psk.bandMask) + "|" + psk.status;
+  if (legendSignature != g_lastPskFooterLine) {
+    drawPskBandLegend(psk, 196);
+    g_lastPskFooterLine = legendSignature;
+  }
+  drawFooter(snapshot);
+}
+
 void drawDxPage(const ClockSnapshot& snapshot) {
   const DxSpotsData& dx = getDxSpotsData();
 
@@ -1127,12 +1439,39 @@ void drawDxPage(const ClockSnapshot& snapshot) {
   drawFooter(snapshot);
 }
 
+void drawPotaPage(const ClockSnapshot& snapshot) {
+  const PotaSpotsData& pota = getPotaSpotsData();
+
+  if (g_pageDirty) {
+    tft.fillScreen(kBg);
+    drawCentered("POTA Spots", 4, 4, kAccent);
+    drawLeft("Freq", kDxColFreq, 24, 2, kMuted);
+    drawLeft("Call", kDxColCall, 24, 2, kMuted);
+    drawLeft("Mode", kDxColMode, 24, 2, kMuted);
+    drawLeft("Park", kDxColTime, 24, 2, kMuted);
+  }
+
+  updatePotaRows(pota);
+
+  drawLeftField(g_lastPotaUpdated, "Updated: " + pota.updated, 8, 186, 2, kMuted, 144);
+
+  String summary = "Status: " + pota.status;
+  if (pota.totalSpots > 0) {
+    summary += "   " + String(pota.spotCount) + "/" + String(pota.totalSpots);
+    if (pota.filteredOut > 0) {
+      summary += "   " + String(pota.filteredOut) + " filtered";
+    }
+  }
+  drawLeftField(g_lastPotaStatus, summary, 8, 204, 1, pota.status == "OK" ? kAccent : kWarn, 308);
+  drawFooter(snapshot);
+}
+
 void drawCurrentPage(const ClockSnapshot& snapshot) {
-  if (g_currentPage != kPageDx) {
-    // Hand the scroll buffer back while it cannot be seen; the heap is shared
-    // with the TLS client used by the JSON refresh.
+  if (g_currentPage != kPageDx && g_currentPage != kPagePota) {
+    // A part-finished animation must not resume when the page comes back, but
+    // the sprite itself is kept - see reserveDisplaySprites.
     g_dxScrollActive = false;
-    releaseDxScrollSprite();
+    clearDxQueue();
   }
 
   switch (g_currentPage) {
@@ -1148,8 +1487,14 @@ void drawCurrentPage(const ClockSnapshot& snapshot) {
     case kPageGreyline:
       drawGreylinePage(snapshot);
       break;
+    case kPagePsk:
+      drawPskPage(snapshot);
+      break;
     case kPageDx:
       drawDxPage(snapshot);
+      break;
+    case kPagePota:
+      drawPotaPage(snapshot);
       break;
     default:
       g_currentPage = kPageClock;
@@ -1269,6 +1614,16 @@ void handleTouch() {
       requestDxSpotsRefresh();
       g_lastDxStatus = "";
       drawLeftField(g_lastDxStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
+    } else if (g_currentPage == kPagePota &&
+               x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
+      requestPotaSpotsRefresh();
+      g_lastPotaStatus = "";
+      drawLeftField(g_lastPotaStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
+    } else if (g_currentPage == kPagePsk &&
+               x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
+      // The request is queued rather than run now: the PSKReporter module holds
+      // its own five minute floor and will pick this up when that has elapsed.
+      requestPskReporterRefresh();
     } else {
       const bool tappedLeft = x < tft.width() / 2;
       if (tappedLeft != getSettings().swapTouchNav) {
@@ -1286,9 +1641,12 @@ void handleTouch() {
 void displayBegin() {
   tft.init();
   tft.setRotation(kLandscapeRotation);
+  reserveDisplaySprites();
   dxSpotsBegin();
   greylineBegin();
   propagationBegin();
+  pskReporterBegin();
+  potaSpotsBegin();
 
   pinMode(kTouchCs, OUTPUT);
   digitalWrite(kTouchCs, HIGH);
@@ -1306,15 +1664,20 @@ void displayUpdate(const ClockSnapshot& snapshot) {
   handleTouch();
   const bool dataChanged = refreshDxSpotsIfNeeded(snapshot.wifiConnected) |
                            refreshPropagationIfNeeded(snapshot.wifiConnected) |
+                           refreshPskReporterIfNeeded(snapshot.wifiConnected) |
+                           refreshPotaSpotsIfNeeded(snapshot.wifiConnected) |
                            updateGreylineData(snapshot.epoch, snapshot.timeValid);
   const uint32_t nowMs = millis();
   if (g_pageDirty || dataChanged || nowMs - g_lastRenderMs >= kRenderIntervalMs) {
     drawCurrentPage(snapshot);
     g_lastRenderMs = nowMs;
-  } else if (g_dxScrollActive) {
-    // Advance the DX list scroll between full page renders so the animation
-    // runs at its own pace without blocking touch or the telnet reader.
-    stepDxScroll();
+  } else if ((g_currentPage == kPageDx || g_currentPage == kPagePota) &&
+             (g_dxScrollActive || dxQueuePending())) {
+    // Advance the DX list between full page renders so the animation runs at
+    // its own pace without blocking touch or the telnet reader.
+    if (!serviceDxQueue()) {
+      finishDxQueueInstantly();
+    }
   }
 }
 

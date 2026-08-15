@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "app_config.h"
+#include "connectivity.h"
 #include "settings.h"
 
 #ifndef PROPAGATION_JSON_URL
@@ -60,7 +61,7 @@ bool httpGet(const String& url, String& body, int& httpCode) {
 
   bool begun = false;
   if (url.startsWith("https://")) {
-    secureClient.setInsecure();
+    configureSecureClient(secureClient);
     begun = http.begin(secureClient, url);
   } else {
     begun = http.begin(plainClient, url);

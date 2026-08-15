@@ -14,12 +14,14 @@ https://github.com/user-attachments/assets/84a32ac5-e0f6-4b6f-89ae-bf321e0d997d
 
 - ESP32-2432S028R / CYD ILI9341 display support
 - XPT2046 touch navigation
-- Five dashboard pages:
+- Seven dashboard pages:
   - Clock
   - HF Propagation from HamQSL
   - VHF Conditions from HamQSL
   - Greyline map with QTH marker, sun marker, terminator, sunrise/sunset, and day/night status
+  - PSKReporter reception reports for your callsign, plotted on the same world map
   - DX spots from JSON and/or a persistent Telnet DX Cluster connection
+  - POTA activator spots, with an optional distance filter from your locator
 - Captive portal Wi-Fi setup, which automatically switches off a few seconds after the device confirms it has joined your Wi-Fi network (it can be switched back on from the web settings page if you need it again)
 - Local web settings page on the device IP
 - Hold the BOOT button on the back of the board for 5 seconds to factory reset all settings
@@ -184,8 +186,10 @@ This web UI is intended for a trusted local network. It does not include authent
 - Tap right side: previous page
 - Tap centre on HF Propagation or VHF Conditions page: manual propagation refresh
 - Tap centre on DX Spots page: manual DX refresh
+- Tap centre on PSKReporter page: queue a manual PSKReporter refresh (it runs once the five minute minimum interval has elapsed)
+- Tap centre on POTA Spots page: manual POTA refresh
 
-The footer shows Wi-Fi status, NTP status, and current page number. On the Propagation, VHF, Greyline, and DX Spots pages it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
+The footer shows Wi-Fi status, NTP status, and current page number. On every page except the Clock it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
 
 ## Dashboard Pages
 
@@ -251,13 +255,40 @@ Displays:
 
 Changing the Maidenhead locator refreshes the Greyline calculations and map immediately; no reboot is required.
 
+### PSKReporter
+
+Plots recent PSKReporter reception reports for the configured callsign on the same world map the Greyline page uses.
+
+Displays:
+
+- One marker per four-character grid square, coloured by band
+- QTH marker
+- Grid and report counts for the selected time window
+- Furthest report (callsign, locator, great-circle distance)
+- A legend naming only the bands currently present, each in its marker colour
+
+Settings:
+
+- `Direction`: `Who is hearing me` (default) queries `senderCallsign`; `Who I am hearing` queries `receiverCallsign`
+- `Report window minutes`: how far back to ask for, 5 to 360, default 60
+- `PSKReporter refresh minutes`: 5 to 120, default 5
+- `Contact email`: optional, sent as `appcontact`
+
+The page needs a callsign to work. With the callsign field blank it shows the map and a prompt to set one, and makes no requests.
+
+PSKReporter asks that reception data is retrieved no more often than once every five minutes. The firmware enforces that as a hard floor: the refresh setting will not go below five minutes, and a manual refresh from the touch screen or from saving settings is queued rather than run immediately if the last request was more recent than that. A `503` response, which is how PSKReporter turns away a client querying too often, is shown as `Rate limited` on the status line.
+
+Reports are read straight off the socket one XML element at a time and never buffered whole, so an active callsign returning hundreds of reports costs no more RAM than a quiet one. Up to 48 grid squares are plotted; the furthest-report line considers every report returned, not just the plotted ones.
+
 ### DX Spots
 
 Supports three source modes:
 
-- `Auto` (default): try JSON first, then use Telnet if JSON fails or has no usable spots
+- `Auto` (default): backfill the list from JSON, then keep a Telnet connection open and add live spots on top of it
 - `JSON`: use only the configured JSON feed
 - `Telnet`: maintain a connection to the configured DX Cluster
+
+In `Auto`, JSON fills the list in one request so the page is useful within seconds of boot, and Telnet then delivers spots live, one at a time. Once Telnet is delivering it keeps the list and JSON is left alone; JSON refreshes again only while Telnet has yet to deliver, or if the connection drops or falls silent for 10 minutes. A Telnet connection that cannot reach the cluster does not disturb the JSON list on screen.
 
 The default JSON endpoint is:
 
@@ -326,6 +357,30 @@ UTC0
 
 If your country is not listed, choose `Custom POSIX TZ` and enter a POSIX rule manually.
 
+### POTA Spots
+
+Live Parks on the Air activator spots from `https://api.pota.app/spot/activator`.
+
+Displays `Freq | Call | Mode | Park`, newest spot first. The park reference takes the column DX Spots uses for time, since the reference is what you need in order to log the contact.
+
+New spots scroll in one at a time using the same animation as the DX Spots page. Both pages share one set of row state and one scroll sprite, since only one of them can be on screen at a time; they differ only in the header of the last column.
+
+Settings:
+
+- `Max distance km`: great-circle distance from your Maidenhead locator. `0` (the default) shows everything.
+- `POTA refresh minutes`: 1 to 120, default 5.
+- `Hide RBN spots`: RBN entries are posted automatically by skimmers rather than by a person.
+
+The status line reports how many spots were shown out of how many the feed returned, plus how many the filters rejected, so a short list explains itself.
+
+Notes and limits:
+
+- POTA publishes no formal rate limit. Existing client libraries settle on one request a minute, so that is enforced as a hard floor regardless of the refresh setting.
+- The feed returns roughly a hundred spots in no guaranteed order. They are read one JSON object at a time and never buffered as a whole array, and the newest eight that pass the filters are kept.
+- Repeat spots of the same activator at the same park are collapsed into one row, so a heavily spotted station cannot crowd out everyone else.
+- Spots without coordinates are always shown, even when a distance limit is set, since there is no way to tell whether they are near or far.
+- SOTA is deliberately not included. The `api2.sota.org.uk` endpoint currently returns a notice that it is deprecated and due for removal, so it is left until the replacement API is settled.
+
 ## Data Refresh
 
 Default refresh intervals:
@@ -333,10 +388,12 @@ Default refresh intervals:
 - HF Propagation: 15 minutes
 - DX JSON: 5 minutes
 - DX Telnet: persistent connection with reconnect attempts limited to once every 30 seconds
+- PSKReporter: 5 minutes, which is also the lowest interval the service permits
+- POTA: 5 minutes, with a one minute hard floor
 - Greyline calculations: once per minute
 - Clock: once per second
 
-Propagation and DX refresh intervals can be changed in the web settings page.
+Propagation, DX, and PSKReporter refresh intervals can be changed in the web settings page.
 
 ## Project Structure
 
@@ -354,6 +411,8 @@ src/
   dashboard_display.*   TFT UI, touch, page rendering
   propagation.*         HamQSL fetch and parsing
   greyline.*            Solar and greyline calculations
+  psk_reporter.*        PSKReporter query, streaming XML parse, rate limiting
+  pota_spots.*          POTA spot fetch, streaming JSON parse, distance filter
   dx_spots.*            DX JSON fetch plus Telnet connection and parsing
 ```
 

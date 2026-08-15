@@ -79,3 +79,7 @@ ClockSnapshot getClockSnapshot() {
   snapshot.uptimeSeconds = millis() / 1000;
   return snapshot;
 }
+
+void configureSecureClient(WiFiClientSecure& client) {
+  client.setInsecure();
+}
