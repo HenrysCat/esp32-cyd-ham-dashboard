@@ -40,6 +40,10 @@ static_assert(kAutoPageMaskAll == (1u << kPageCount) - 1u,
 constexpr uint8_t kLandscapeRotation = 0;
 constexpr uint32_t kTouchDebounceMs = 300;
 constexpr uint32_t kRenderIntervalMs = 250;
+// How long a running DX or POTA scroll may hold back an automatic page change.
+// Without a cap a busy telnet feed could keep the rotation parked on one page
+// indefinitely.
+constexpr uint32_t kAutoPageScrollGraceMs = 3000;
 constexpr int16_t kFooterTop = 214;
 constexpr int16_t kFooterHeight = 26;
 constexpr int16_t kFooterY = kFooterTop + 7;
@@ -139,6 +143,10 @@ bool g_touchWasDown = false;
 uint32_t g_lastTouchActionMs = 0;
 uint32_t g_lastRenderMs = 0;
 uint32_t g_lastPageChangeMs = 0;
+// Backlight percentage currently driven to the panel. Zero is below the
+// five percent floor, so it never matches a real target and the first check
+// after a settings change always re-applies.
+uint8_t g_appliedBrightnessPercent = 0;
 
 String g_lastFooterSimple;
 String g_lastFooterUtc;
@@ -1579,11 +1587,68 @@ void serviceAutoPageChange(uint32_t nowMs) {
     g_lastPageChangeMs = nowMs;
     return;
   }
-  if (nowMs - g_lastPageChangeMs < static_cast<uint32_t>(settings.autoPageSeconds) * 1000UL) {
+  const uint32_t dwellMs = static_cast<uint32_t>(settings.autoPageSeconds) * 1000UL;
+  if (nowMs - g_lastPageChangeMs < dwellMs) {
+    return;
+  }
+  // A row is part way through scrolling in. Cutting that off mid-slide reads
+  // as a glitch, so the change waits for the list to settle. The dwell is
+  // deliberately not restarted, so the page moves on the moment it does.
+  if ((g_currentPage == kPageDx || g_currentPage == kPagePota) &&
+      (g_dxScrollActive || dxQueuePending()) &&
+      nowMs - g_lastPageChangeMs < dwellMs + kAutoPageScrollGraceMs) {
     return;
   }
   g_lastPageChangeMs = nowMs;
   advanceToNextIncludedPage(settings.autoPageMask);
+}
+
+// Backlight PWM is driven from two places now - a settings change and the
+// night fade - so the ledc plumbing lives here rather than inside either.
+void applyBacklight(uint8_t percent) {
+#ifdef TFT_BL
+  constexpr uint8_t kBacklightChannel = 0;
+  constexpr uint32_t kBacklightFrequency = 5000;
+  constexpr uint8_t kBacklightResolution = 8;
+
+  const uint8_t brightness =
+      constrain(percent, static_cast<uint8_t>(5), static_cast<uint8_t>(100));
+  uint8_t duty = map(brightness, 0, 100, 0, 255);
+#if TFT_BACKLIGHT_ON == LOW
+  duty = 255 - duty;
+#endif
+  ledcSetup(kBacklightChannel, kBacklightFrequency, kBacklightResolution);
+  ledcAttachPin(TFT_BL, kBacklightChannel);
+  ledcWrite(kBacklightChannel, duty);
+#else
+  (void)percent;
+#endif
+}
+
+// Blends the day and night levels by how far through the sunset (or sunrise)
+// fade the sun is, so the backlight follows the light outside rather than
+// stepping at one particular minute. Before NTP, or with no night dimming
+// asked for, this is simply the day level.
+uint8_t targetBrightnessPercent(time_t epoch) {
+  const AppSettings& settings = getSettings();
+  if (!settings.nightDimEnabled) {
+    return settings.brightnessPercent;
+  }
+  const float night = greylineNightFraction(epoch, settings.nightFadeMinutes);
+  const float day = static_cast<float>(settings.brightnessPercent);
+  const float dim = static_cast<float>(settings.nightBrightnessPercent);
+  return static_cast<uint8_t>(day + (dim - day) * night + 0.5f);
+}
+
+// Cheap enough to run every loop: the PWM is only touched on the whole-percent
+// steps the fade actually crosses.
+void serviceNightDimming(time_t epoch) {
+  const uint8_t target = targetBrightnessPercent(epoch);
+  if (target == g_appliedBrightnessPercent) {
+    return;
+  }
+  g_appliedBrightnessPercent = target;
+  applyBacklight(target);
 }
 
 uint16_t readTouchAxis(uint8_t command) {
@@ -1739,6 +1804,7 @@ void displayUpdate(const ClockSnapshot& snapshot) {
                            refreshPotaSpotsIfNeeded(snapshot.wifiConnected) |
                            updateGreylineData(snapshot.epoch, snapshot.timeValid);
   const uint32_t nowMs = millis();
+  serviceNightDimming(snapshot.epoch);
   serviceAutoPageChange(nowMs);
   if (g_pageDirty || dataChanged || nowMs - g_lastRenderMs >= kRenderIntervalMs) {
     drawCurrentPage(snapshot);
@@ -1785,21 +1851,10 @@ void applyDisplaySettings() {
 
   tft.invertDisplay(settings.invertColours);
 
-#ifdef TFT_BL
-  constexpr uint8_t kBacklightChannel = 0;
-  constexpr uint32_t kBacklightFrequency = 5000;
-  constexpr uint8_t kBacklightResolution = 8;
-
-  const uint8_t brightness = constrain(settings.brightnessPercent, static_cast<uint8_t>(5),
-                                       static_cast<uint8_t>(100));
-  uint8_t duty = map(brightness, 0, 100, 0, 255);
-#if TFT_BACKLIGHT_ON == LOW
-  duty = 255 - duty;
-#endif
-  ledcSetup(kBacklightChannel, kBacklightFrequency, kBacklightResolution);
-  ledcAttachPin(TFT_BL, kBacklightChannel);
-  ledcWrite(kBacklightChannel, duty);
-#endif
+  // Re-apply the backlight unconditionally: the panel registers were just
+  // rewritten, and the night fade may want a different level than before.
+  g_appliedBrightnessPercent = 0;
+  serviceNightDimming(getClockSnapshot().epoch);
 
   clearPageState();
   g_pageDirty = true;
@@ -1808,6 +1863,10 @@ void applyDisplaySettings() {
 
 uint8_t getCurrentDashboardPageNumber() {
   return static_cast<uint8_t>(g_currentPage) + 1;
+}
+
+uint8_t getAppliedBrightnessPercent() {
+  return g_appliedBrightnessPercent;
 }
 
 const char* dashboardPageName(uint8_t pageIndex) {

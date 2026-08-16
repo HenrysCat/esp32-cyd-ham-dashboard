@@ -21,6 +21,11 @@ enum SunTimeResult : uint8_t {
 GreylineData g_data;
 uint32_t g_lastUpdateMs = 0;
 time_t g_lastEpochMinute = 0;
+// Today's crossings as fractional UTC minutes. Kept apart from the formatted
+// strings in g_data so the night fade can interpolate between them.
+double g_sunriseMinuteUtc = 0.0;
+double g_sunsetMinuteUtc = 0.0;
+bool g_sunTimesValid = false;
 
 String formatDouble(double value, uint8_t decimals) {
   char buffer[20];
@@ -88,6 +93,19 @@ int normalizeMinute(int minute) {
   return minute < 0 ? minute + 1440 : minute;
 }
 
+// Shortest signed distance from b to a in minutes, in the range [-720, 720).
+// Positive means a is past b.
+double signedMinuteDiff(double a, double b) {
+  double diff = a - b;
+  while (diff < -720.0) {
+    diff += 1440.0;
+  }
+  while (diff >= 720.0) {
+    diff -= 1440.0;
+  }
+  return diff;
+}
+
 int circularMinuteDiff(int a, int b) {
   a = normalizeMinute(a);
   b = normalizeMinute(b);
@@ -140,19 +158,26 @@ void calculateSubsolarPoint(time_t epoch, double& latitude, double& longitude) {
   longitude = normalizeLongitude((720.0 - eqTime - utcMinutes) / 4.0);
 }
 
-String daylightStatus(int nowMinutes, double sunrise, double sunset) {
+bool isDaylight(int nowMinutes, double sunrise, double sunset) {
   const int sunriseMinute = normalizeMinute(static_cast<int>(sunrise + 0.5));
   const int sunsetMinute = normalizeMinute(static_cast<int>(sunset + 0.5));
   nowMinutes = normalizeMinute(nowMinutes);
-  if (circularMinuteDiff(nowMinutes, sunriseMinute) <= kGreylineWindowMinutes ||
-      circularMinuteDiff(nowMinutes, sunsetMinute) <= kGreylineWindowMinutes) {
+  // A sunset minute earlier than the sunrise minute means the daylight period
+  // runs across midnight UTC, so the test flips from "between" to "outside".
+  return sunriseMinute <= sunsetMinute
+             ? nowMinutes > sunriseMinute && nowMinutes < sunsetMinute
+             : nowMinutes > sunriseMinute || nowMinutes < sunsetMinute;
+}
+
+String daylightStatus(int nowMinutes, double sunrise, double sunset) {
+  const int sunriseMinute = normalizeMinute(static_cast<int>(sunrise + 0.5));
+  const int sunsetMinute = normalizeMinute(static_cast<int>(sunset + 0.5));
+  const int minute = normalizeMinute(nowMinutes);
+  if (circularMinuteDiff(minute, sunriseMinute) <= kGreylineWindowMinutes ||
+      circularMinuteDiff(minute, sunsetMinute) <= kGreylineWindowMinutes) {
     return "Twilight";
   }
-
-  const bool daylight = sunriseMinute <= sunsetMinute
-                            ? nowMinutes > sunriseMinute && nowMinutes < sunsetMinute
-                            : nowMinutes > sunriseMinute || nowMinutes < sunsetMinute;
-  return daylight ? "Daylight" : "Darkness";
+  return isDaylight(nowMinutes, sunrise, sunset) ? "Daylight" : "Darkness";
 }
 
 String greylineStatus(int nowMinutes, double sunrise, double sunset) {
@@ -170,6 +195,8 @@ String greylineStatus(int nowMinutes, double sunrise, double sunset) {
 
 void setInvalidData(const String& qth, const String& status) {
   g_data.valid = false;
+  g_data.sunIsDown = false;
+  g_sunTimesValid = false;
   g_data.latitudeValue = 0.0;
   g_data.longitudeValue = 0.0;
   g_data.sunLatitudeValue = 0.0;
@@ -318,6 +345,10 @@ bool updateGreylineData(time_t epoch, bool timeValid) {
     g_data.sunsetUtc = formatUtcMinutes(sunset);
     g_data.noonUtc = formatUtcMinutes(solarNoon);
     g_data.dayLength = formatDayLength(dayLength);
+    g_sunriseMinuteUtc = sunrise;
+    g_sunsetMinuteUtc = sunset;
+    g_sunTimesValid = true;
+    g_data.sunIsDown = !isDaylight(nowMinutes, sunrise, sunset);
     g_data.status = daylightStatus(nowMinutes, sunrise, sunset);
     g_data.greyline = greylineStatus(nowMinutes, sunrise, sunset);
   } else {
@@ -325,6 +356,8 @@ bool updateGreylineData(time_t epoch, bool timeValid) {
     g_data.sunsetUtc = "--";
     g_data.noonUtc = formatUtcMinutes(solarNoon);
     g_data.dayLength = formatDayLength(dayLength);
+    g_sunTimesValid = false;
+    g_data.sunIsDown = sunTimeResult != kPolarDay;
     g_data.status = sunTimeResult == kPolarDay ? "Polar daylight" : "Polar darkness";
     g_data.greyline = "Not near greyline";
   }
@@ -351,4 +384,36 @@ bool updateGreylineData(time_t epoch, bool timeValid) {
 
 const GreylineData& getGreylineData() {
   return g_data;
+}
+
+float greylineNightFraction(time_t epoch, uint16_t fadeMinutes) {
+  if (!g_data.valid) {
+    return 0.0f;
+  }
+  if (!g_sunTimesValid) {
+    // Polar day or night: the sun never crosses, so there is nothing to fade
+    // across and the value sits at whichever end applies.
+    return g_data.sunIsDown ? 1.0f : 0.0f;
+  }
+
+  tm utc;
+  gmtime_r(&epoch, &utc);
+  const double nowMinutes = utc.tm_hour * 60.0 + utc.tm_min + utc.tm_sec / 60.0;
+  // Centred on the crossing, so the fade begins before the sun is down and
+  // finishes after it, the way the light outside actually goes. A zero window
+  // would divide by zero, so it collapses to a half-minute switch instead.
+  const double half = fadeMinutes > 0 ? fadeMinutes / 2.0 : 0.5;
+
+  const double pastSunset = signedMinuteDiff(nowMinutes, g_sunsetMinuteUtc);
+  if (fabs(pastSunset) <= half) {
+    return static_cast<float>(0.5 + pastSunset / (2.0 * half));
+  }
+  const double pastSunrise = signedMinuteDiff(nowMinutes, g_sunriseMinuteUtc);
+  if (fabs(pastSunrise) <= half) {
+    return static_cast<float>(0.5 - pastSunrise / (2.0 * half));
+  }
+  // Where a long window and a short summer night make the two fades overlap,
+  // the sunset arm above wins and the value simply never reaches full dark,
+  // which is a fair description of that night anyway.
+  return g_data.sunIsDown ? 1.0f : 0.0f;
 }

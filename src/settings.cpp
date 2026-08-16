@@ -35,6 +35,12 @@ constexpr uint8_t kDefaultBrightnessPercent = 100;
 constexpr uint16_t kDefaultAutoPageSeconds = 15;
 constexpr uint16_t kMinAutoPageSeconds = 3;
 constexpr uint16_t kMaxAutoPageSeconds = 600;
+constexpr uint8_t kDefaultNightBrightnessPercent = 20;
+// Roughly the length of civil twilight at temperate latitudes, so the default
+// fade tracks the light outside reasonably closely.
+constexpr uint16_t kDefaultNightFadeMinutes = 40;
+constexpr uint16_t kMinNightFadeMinutes = 1;
+constexpr uint16_t kMaxNightFadeMinutes = 240;
 
 #ifndef ROTATE90_DEFAULT
 #define ROTATE90_DEFAULT false
@@ -159,6 +165,11 @@ void normalizeSettings(AppSettings& settings) {
   // rotation simply has nowhere to go, which is what unticking everything asks
   // for.
   settings.autoPageMask &= kAutoPageMaskAll;
+  settings.nightBrightnessPercent =
+      constrain(settings.nightBrightnessPercent, static_cast<uint8_t>(5),
+                static_cast<uint8_t>(100));
+  settings.nightFadeMinutes =
+      constrain(settings.nightFadeMinutes, kMinNightFadeMinutes, kMaxNightFadeMinutes);
 }
 }
 
@@ -203,6 +214,11 @@ void settingsBegin() {
   currentSettings.autoPageMask = preferences.getUChar("autopages", kAutoPageMaskAll);
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
+  currentSettings.nightDimEnabled = preferences.getBool("nightdim", false);
+  currentSettings.nightBrightnessPercent =
+      preferences.getUChar("nightpct", kDefaultNightBrightnessPercent);
+  currentSettings.nightFadeMinutes =
+      preferences.getUShort("nightfade", kDefaultNightFadeMinutes);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
   currentSettings.rotate90 = preferences.getBool("rot90", ROTATE90_DEFAULT);
   currentSettings.flip180 = preferences.getBool("flip180", FLIP180_DEFAULT);
@@ -247,6 +263,9 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("autosecs", currentSettings.autoPageSeconds);
   preferences.putUChar("autopages", currentSettings.autoPageMask);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
+  preferences.putBool("nightdim", currentSettings.nightDimEnabled);
+  preferences.putUChar("nightpct", currentSettings.nightBrightnessPercent);
+  preferences.putUShort("nightfade", currentSettings.nightFadeMinutes);
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
   preferences.putBool("rot90", currentSettings.rotate90);
   preferences.putBool("flip180", currentSettings.flip180);

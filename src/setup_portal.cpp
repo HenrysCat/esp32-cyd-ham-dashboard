@@ -144,6 +144,11 @@ String statusJson() {
   json += snapshot.timeValid ? F("true") : F("false");
   json += F(",\"page\":");
   json += String(getCurrentDashboardPageNumber());
+  json += F(",\"backlight\":");
+  json += String(getAppliedBrightnessPercent());
+  json += F(",\"sun\":\"");
+  json += jsonEscape(getGreylineData().status);
+  json += F("\"");
   json += F(",\"propagation_status\":\"");
   json += jsonEscape(propagation.status);
   json += F("\",\"dx_status\":\"");
@@ -161,7 +166,7 @@ String pageHtml(const String& message = "") {
   const DxSpotsData& dx = getDxSpotsData();
 
   String html;
-  html.reserve(12288);
+  html.reserve(13312);
   html += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>CYD HamClock Settings</title><style>");
   html += F("body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#10151c;color:#f3f7fb}");
@@ -340,7 +345,23 @@ String pageHtml(const String& message = "") {
   html += F("</div><div class='card'><h2>Display</h2>");
   html += F("<label for='bright'>Backlight brightness percent</label><input id='bright' name='bright' type='number' min='5' max='100' value='");
   html += String(settings.brightnessPercent);
-  html += F("'><label><input name='swaprb' type='checkbox' value='1'");
+  html += F("'><small>Used as the daytime level when night dimming is switched on below.</small>");
+  html += F("<label><input name='nightdim' type='checkbox' value='1'");
+  html += checked(settings.nightDimEnabled);
+  html += F(">Dim the backlight at night</label>");
+  html += F("<div class='grid'><div><label for='nightpct'>Night brightness percent</label><input id='nightpct' name='nightpct' type='number' min='5' max='100' value='");
+  html += String(settings.nightBrightnessPercent);
+  html += F("'></div><div><label for='nightfade'>Fade minutes</label><input id='nightfade' name='nightfade' type='number' min='1' max='240' value='");
+  html += String(settings.nightFadeMinutes);
+  html += F("'></div></div>");
+  html += F("<small>Sunrise and sunset are worked out from your Maidenhead locator, so set that correctly first. The backlight fades between the two levels across the window given, centred on each crossing: a 40 minute fade starts 20 minutes before sunset and finishes 20 minutes after. Current sun state: <code>");
+  html += htmlEscape(getGreylineData().status);
+  html += F("</code>, sunrise <code>");
+  html += htmlEscape(getGreylineData().sunriseUtc);
+  html += F("</code>, sunset <code>");
+  html += htmlEscape(getGreylineData().sunsetUtc);
+  html += F("</code>.</small>");
+  html += F("<label><input name='swaprb' type='checkbox' value='1'");
   if (settings.swapRedBlueChannels) {
     html += F(" checked");
   }
@@ -462,6 +483,11 @@ void handleSave() {
   settings.autoPageMask = autoPageMask;
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
+  settings.nightDimEnabled = server.hasArg("nightdim");
+  settings.nightBrightnessPercent = static_cast<uint8_t>(
+      constrain(server.arg("nightpct").toInt(), 5L, 100L));
+  settings.nightFadeMinutes = static_cast<uint16_t>(
+      constrain(server.arg("nightfade").toInt(), 1L, 240L));
   settings.swapRedBlueChannels = server.hasArg("swaprb");
   settings.rotate90 = server.hasArg("rot90");
   settings.flip180 = server.hasArg("flip180");

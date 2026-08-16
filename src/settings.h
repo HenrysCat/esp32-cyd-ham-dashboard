@@ -45,6 +45,11 @@ struct AppSettings {
   // Pages included in the automatic rotation, as a kAutoPageMaskAll bitmask.
   uint8_t autoPageMask;
   uint8_t brightnessPercent;
+  // Fades the backlight to nightBrightnessPercent across a window centred on
+  // sunrise and sunset at the configured locator.
+  bool nightDimEnabled;
+  uint8_t nightBrightnessPercent;
+  uint16_t nightFadeMinutes;
   bool swapRedBlueChannels;
   bool rotate90;
   bool flip180;

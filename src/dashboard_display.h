@@ -15,5 +15,8 @@ void displayBegin();
 void displayUpdate(const ClockSnapshot& snapshot);
 void applyDisplaySettings();
 uint8_t getCurrentDashboardPageNumber();
+// Backlight level actually being driven, which during a night fade sits
+// between the day and night settings.
+uint8_t getAppliedBrightnessPercent();
 void displayShowMessage(const String& title, const String& subtitle);
 void requestDisplayRedraw();
