@@ -29,6 +29,7 @@ https://github.com/user-attachments/assets/772c46cd-7d77-45ed-b29a-c5d189fbcf8b
 - NTP time sync
 - Configurable callsign, locator, timezone, data URLs, refresh intervals, and brightness
 - Optional automatic page change, cycling only the pages you tick at your chosen interval
+- Optional night dimming, fading the backlight between a day and a night level across sunrise and sunset
 - Settings stored in ESP32 non-volatile preferences
 - No LVGL, SD card, or external filesystem required
 
@@ -153,7 +154,7 @@ The setup page lets you configure:
 - DX source mode, JSON URL, and Telnet host/port
 - Refresh intervals
 - Automatic page change, with the dwell in seconds and which pages take part
-- Backlight brightness
+- Backlight brightness, and optional night dimming with its own level and fade length
 - Display colour swap/invert and orientation (90-degree rotate, 180-degree flip, mirror) for differently wired CYD panels
 - Touch page navigation direction swap for differently wired touch controller variants
 
@@ -195,6 +196,16 @@ This web UI is intended for a trusted local network. It does not include authent
 The footer shows Wi-Fi status, NTP status, and current page number. On every page except the Clock it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
 
 The Automatic Page Change section of the web settings page can cycle the dashboard on its own. Set how many seconds each page is shown (3 to 600) and tick which pages take part; unticked pages are skipped by the cycle but are still reachable by tapping. Any tap restarts the countdown, so a page being read is not pulled away mid-look.
+
+If a DX or POTA row is part way through scrolling in when the countdown expires, the change waits for the list to settle rather than cutting the slide off, then turns the page immediately. A three second grace cap keeps a busy Telnet feed from parking the rotation on one page.
+
+## Night Dimming
+
+The Display section of the web settings page can fade the backlight down after dark. Set a night brightness percent and a fade length in minutes, and the backlight moves between the daytime brightness and the night level across a window centred on each crossing: a 40 minute fade starts 20 minutes before sunset and finishes 20 minutes after, then reverses at sunrise.
+
+Sunrise and sunset come from your Maidenhead locator, the same figures the Greyline page shows, so set the locator correctly first. The settings page prints the current sun state and today's sunrise and sunset next to the controls. Before NTP has synced, or with dimming switched off, the daytime brightness is used.
+
+The `/status` endpoint reports `backlight` (the level actually being driven, which sits between the two settings during a fade) and `sun`, so the fade can be watched at dusk without staring at the panel.
 
 ## Dashboard Pages
 
