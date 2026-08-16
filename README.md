@@ -28,6 +28,7 @@ https://github.com/user-attachments/assets/772c46cd-7d77-45ed-b29a-c5d189fbcf8b
 - Optional mDNS address: `http://cyd-ham.local/`
 - NTP time sync
 - Configurable callsign, locator, timezone, data URLs, refresh intervals, and brightness
+- Optional automatic page change, cycling only the pages you tick at your chosen interval
 - Settings stored in ESP32 non-volatile preferences
 - No LVGL, SD card, or external filesystem required
 
@@ -147,9 +148,11 @@ The setup page lets you configure:
 - Wi-Fi SSID and password
 - Timezone preset, label, and POSIX timezone rule
 - Maidenhead locator
+- 12-hour or 24-hour local clock on the clock page
 - Propagation data source
 - DX source mode, JSON URL, and Telnet host/port
 - Refresh intervals
+- Automatic page change, with the dwell in seconds and which pages take part
 - Backlight brightness
 - Display colour swap/invert and orientation (90-degree rotate, 180-degree flip, mirror) for differently wired CYD panels
 - Touch page navigation direction swap for differently wired touch controller variants
@@ -191,6 +194,8 @@ This web UI is intended for a trusted local network. It does not include authent
 
 The footer shows Wi-Fi status, NTP status, and current page number. On every page except the Clock it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
 
+The Automatic Page Change section of the web settings page can cycle the dashboard on its own. Set how many seconds each page is shown (3 to 600) and tick which pages take part; unticked pages are skipped by the cycle but are still reachable by tapping. Any tap restarts the countdown, so a page being read is not pulled away mid-look.
+
 ## Dashboard Pages
 
 ### Clock
@@ -198,7 +203,7 @@ The footer shows Wi-Fi status, NTP status, and current page number. On every pag
 Shows:
 
 - Large UTC time
-- Configured local time
+- Configured local time, in 24-hour or 12-hour with AM/PM (web settings page, Time and Location)
 - Date
 - Callsign and Maidenhead locator
 - Device IP

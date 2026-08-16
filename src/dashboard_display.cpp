@@ -4,6 +4,7 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "dx_spots.h"
@@ -30,6 +31,11 @@ enum DashboardPage : uint8_t {
   kPagePota,
   kPageCount
 };
+
+static_assert(kPageCount == kDashboardPageCount,
+              "kDashboardPageCount must match the number of dashboard pages");
+static_assert(kAutoPageMaskAll == (1u << kPageCount) - 1u,
+              "kAutoPageMaskAll must have one bit per dashboard page");
 
 constexpr uint8_t kLandscapeRotation = 0;
 constexpr uint32_t kTouchDebounceMs = 300;
@@ -132,6 +138,7 @@ bool g_mapSpriteReady = false;
 bool g_touchWasDown = false;
 uint32_t g_lastTouchActionMs = 0;
 uint32_t g_lastRenderMs = 0;
+uint32_t g_lastPageChangeMs = 0;
 
 String g_lastFooterSimple;
 String g_lastFooterUtc;
@@ -1250,7 +1257,7 @@ void drawFooter(const ClockSnapshot& snapshot) {
                kFooterWPage);
 }
 
-void formatTimes(const ClockSnapshot& snapshot) {
+void formatTimes(const ClockSnapshot& snapshot, bool use12Hour) {
   if (!snapshot.timeValid) {
     strlcpy(utcBuffer, "--:--:--", sizeof(utcBuffer));
     strlcpy(localBuffer, "--:--:--", sizeof(localBuffer));
@@ -1263,8 +1270,18 @@ void formatTimes(const ClockSnapshot& snapshot) {
   gmtime_r(&snapshot.epoch, &utcTime);
   localtime_r(&snapshot.epoch, &localTime);
 
+  // The UTC readout stays 24-hour whatever the setting says; only the local
+  // clock below it follows the 12/24 hour choice.
   strftime(utcBuffer, sizeof(utcBuffer), "%H:%M:%S", &utcTime);
-  strftime(localBuffer, sizeof(localBuffer), "%H:%M:%S", &localTime);
+  if (use12Hour) {
+    strftime(localBuffer, sizeof(localBuffer), "%I:%M:%S %p", &localTime);
+    // %I pads to two digits, which reads oddly before ten, so drop the zero.
+    if (localBuffer[0] == '0') {
+      memmove(localBuffer, localBuffer + 1, strlen(localBuffer));
+    }
+  } else {
+    strftime(localBuffer, sizeof(localBuffer), "%H:%M:%S", &localTime);
+  }
   strftime(dateBuffer, sizeof(dateBuffer), "%d %b %Y", &localTime);
 }
 
@@ -1281,7 +1298,7 @@ String formatUptime(uint32_t seconds) {
 
 void drawClockPage(const ClockSnapshot& snapshot) {
   const AppSettings& settings = getSettings();
-  formatTimes(snapshot);
+  formatTimes(snapshot, settings.clock12Hour);
 
   if (g_pageDirty) {
     tft.fillScreen(kBg);
@@ -1536,6 +1553,39 @@ void previousPage() {
   g_pageDirty = true;
 }
 
+// Moves to the next page the rotation mask includes. Pages left out are
+// skipped, the current one included, so a rotation still moves on from a page
+// that was reached by hand. Stops short of a full lap so a mask holding only
+// the page already showing leaves the screen alone rather than repainting it
+// on every interval.
+void advanceToNextIncludedPage(uint8_t mask) {
+  for (uint8_t step = 1; step < kPageCount; ++step) {
+    const uint8_t candidate =
+        static_cast<uint8_t>((static_cast<uint8_t>(g_currentPage) + step) % kPageCount);
+    if (mask & (1u << candidate)) {
+      g_currentPage = static_cast<DashboardPage>(candidate);
+      clearPageState();
+      g_pageDirty = true;
+      return;
+    }
+  }
+}
+
+void serviceAutoPageChange(uint32_t nowMs) {
+  const AppSettings& settings = getSettings();
+  if (!settings.autoPageChange || settings.autoPageMask == 0) {
+    // Held at now while off, so switching it on starts a whole fresh interval
+    // rather than firing straight away.
+    g_lastPageChangeMs = nowMs;
+    return;
+  }
+  if (nowMs - g_lastPageChangeMs < static_cast<uint32_t>(settings.autoPageSeconds) * 1000UL) {
+    return;
+  }
+  g_lastPageChangeMs = nowMs;
+  advanceToNextIncludedPage(settings.autoPageMask);
+}
+
 uint16_t readTouchAxis(uint8_t command) {
   touchSpi.transfer(command);
   const uint16_t high = touchSpi.transfer(0x00);
@@ -1617,6 +1667,9 @@ void handleTouch() {
 
   if (touched && !g_touchWasDown && nowMs - g_lastTouchActionMs >= kTouchDebounceMs) {
     g_lastTouchActionMs = nowMs;
+    // Any tap, whether it changes page or refreshes one, restarts the dwell so
+    // an automatic change cannot pull the page away as it is being read.
+    g_lastPageChangeMs = nowMs;
     if ((g_currentPage == kPagePropagation || g_currentPage == kPageVhf) &&
         x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestPropagationRefresh();
@@ -1686,6 +1739,7 @@ void displayUpdate(const ClockSnapshot& snapshot) {
                            refreshPotaSpotsIfNeeded(snapshot.wifiConnected) |
                            updateGreylineData(snapshot.epoch, snapshot.timeValid);
   const uint32_t nowMs = millis();
+  serviceAutoPageChange(nowMs);
   if (g_pageDirty || dataChanged || nowMs - g_lastRenderMs >= kRenderIntervalMs) {
     drawCurrentPage(snapshot);
     g_lastRenderMs = nowMs;
@@ -1749,10 +1803,24 @@ void applyDisplaySettings() {
 
   clearPageState();
   g_pageDirty = true;
+  g_lastPageChangeMs = millis();
 }
 
 uint8_t getCurrentDashboardPageNumber() {
   return static_cast<uint8_t>(g_currentPage) + 1;
+}
+
+const char* dashboardPageName(uint8_t pageIndex) {
+  switch (pageIndex) {
+    case kPageClock: return "Clock";
+    case kPagePropagation: return "HF Propagation";
+    case kPageVhf: return "VHF Conditions";
+    case kPageGreyline: return "Greyline";
+    case kPagePsk: return "PSKReporter";
+    case kPageDx: return "DX Spots";
+    case kPagePota: return "POTA Spots";
+    default: return "";
+  }
 }
 
 void displayShowMessage(const String& title, const String& subtitle) {

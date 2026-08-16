@@ -30,6 +30,11 @@ constexpr uint16_t kDefaultPskWindowMinutes = 60;
 constexpr uint16_t kMinPotaRefreshMinutes = 1;
 constexpr uint16_t kDefaultPotaRefreshMinutes = 5;
 constexpr uint8_t kDefaultBrightnessPercent = 100;
+// Long enough to read a page before it moves on, and the floor keeps the
+// rotation from outrunning the map pages, which take a moment to redraw.
+constexpr uint16_t kDefaultAutoPageSeconds = 15;
+constexpr uint16_t kMinAutoPageSeconds = 3;
+constexpr uint16_t kMaxAutoPageSeconds = 600;
 
 #ifndef ROTATE90_DEFAULT
 #define ROTATE90_DEFAULT false
@@ -148,6 +153,12 @@ void normalizeSettings(AppSettings& settings) {
   settings.brightnessPercent =
       constrain(settings.brightnessPercent, static_cast<uint8_t>(5),
                 static_cast<uint8_t>(100));
+  settings.autoPageSeconds =
+      constrain(settings.autoPageSeconds, kMinAutoPageSeconds, kMaxAutoPageSeconds);
+  // An empty selection is left as it is rather than being filled back in: the
+  // rotation simply has nowhere to go, which is what unticking everything asks
+  // for.
+  settings.autoPageMask &= kAutoPageMaskAll;
 }
 }
 
@@ -166,6 +177,7 @@ void settingsBegin() {
   currentSettings.timezoneLabel = readStringOrDefault("tzlabel", kDefaultTimezoneLabel);
   currentSettings.locator = readStringOrDefault("locator", MAIDENHEAD_LOCATOR);
   currentSettings.callsign = preferences.getString("callsign", "");
+  currentSettings.clock12Hour = preferences.getBool("clock12", false);
   currentSettings.useJsonPropagationProxy = preferences.getBool("propjson", false);
   currentSettings.propagationJsonUrl = readStringOrDefault("propurl", PROPAGATION_JSON_URL);
   currentSettings.dxSourceMode = static_cast<DxSourceMode>(
@@ -185,6 +197,10 @@ void settingsBegin() {
       preferences.getUShort("potamins", kDefaultPotaRefreshMinutes);
   currentSettings.potaMaxDistanceKm = preferences.getUShort("potadist", 0);
   currentSettings.potaExcludeRbn = preferences.getBool("potarbn", false);
+  currentSettings.autoPageChange = preferences.getBool("autopage", false);
+  currentSettings.autoPageSeconds =
+      preferences.getUShort("autosecs", kDefaultAutoPageSeconds);
+  currentSettings.autoPageMask = preferences.getUChar("autopages", kAutoPageMaskAll);
   currentSettings.brightnessPercent =
       preferences.getUChar("bright", kDefaultBrightnessPercent);
   currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
@@ -208,6 +224,7 @@ void saveSettings(const AppSettings& settings) {
   preferences.putString("ssid", currentSettings.wifiSsid);
   preferences.putString("pass", currentSettings.wifiPassword);
   preferences.putString("callsign", currentSettings.callsign);
+  preferences.putBool("clock12", currentSettings.clock12Hour);
   preferences.putString("tz", currentSettings.timezone);
   preferences.putString("tzlabel", currentSettings.timezoneLabel);
   preferences.putString("locator", currentSettings.locator);
@@ -226,6 +243,9 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("potamins", currentSettings.potaRefreshMinutes);
   preferences.putUShort("potadist", currentSettings.potaMaxDistanceKm);
   preferences.putBool("potarbn", currentSettings.potaExcludeRbn);
+  preferences.putBool("autopage", currentSettings.autoPageChange);
+  preferences.putUShort("autosecs", currentSettings.autoPageSeconds);
+  preferences.putUChar("autopages", currentSettings.autoPageMask);
   preferences.putUChar("bright", currentSettings.brightnessPercent);
   preferences.putBool("swaprb", currentSettings.swapRedBlueChannels);
   preferences.putBool("rot90", currentSettings.rotate90);

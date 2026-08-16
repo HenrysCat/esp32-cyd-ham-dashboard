@@ -161,7 +161,7 @@ String pageHtml(const String& message = "") {
   const DxSpotsData& dx = getDxSpotsData();
 
   String html;
-  html.reserve(9000);
+  html.reserve(12288);
   html += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>CYD HamClock Settings</title><style>");
   html += F("body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#10151c;color:#f3f7fb}");
@@ -193,7 +193,9 @@ String pageHtml(const String& message = "") {
   html += String(ESP.getFreeHeap());
   html += F("</code></div><div>Current page: <code>");
   html += String(getCurrentDashboardPageNumber());
-  html += F("/7</code></div><div>Propagation: <code>");
+  html += F("/");
+  html += String(kDashboardPageCount);
+  html += F("</code></div><div>Propagation: <code>");
   html += htmlEscape(propagation.status);
   html += F("</code></div><div>DX: <code>");
   html += htmlEscape(dx.source);
@@ -254,6 +256,9 @@ String pageHtml(const String& message = "") {
   html += F("<label for='locator'>Maidenhead locator</label><input id='locator' name='locator' maxlength='6' pattern='[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?' value='");
   html += htmlEscape(settings.locator);
   html += F("'><small>Use a four- or six-character Maidenhead locator. Changes are applied immediately.</small>");
+  html += F("<label><input name='clock12' type='checkbox' value='1'");
+  html += checked(settings.clock12Hour);
+  html += F(">Show the local clock as 12-hour with AM/PM</label><small>Applies to the local time on the clock page. The UTC readout above it stays 24-hour.</small>");
   html += F("</div><div class='card'><h2>Data Sources</h2>");
   html += F("<label for='propmode'>Propagation source mode</label><select id='propmode' name='propmode'>");
   html += F("<option value='direct'");
@@ -312,6 +317,26 @@ String pageHtml(const String& message = "") {
   html += F("<label><input name='potarbn' type='checkbox' value='1'");
   html += checked(settings.potaExcludeRbn);
   html += F(">Hide RBN spots</label><small>RBN spots are posted automatically by skimmers rather than by a person. Hiding them leaves only human-posted spots.</small>");
+  html += F("</div><div class='card'><h2>Automatic Page Change</h2>");
+  html += F("<label><input name='autopage' type='checkbox' value='1'");
+  html += checked(settings.autoPageChange);
+  html += F(">Change pages automatically</label>");
+  html += F("<label for='autosecs'>Seconds on each page</label><input id='autosecs' name='autosecs' type='number' min='3' max='600' value='");
+  html += String(settings.autoPageSeconds);
+  html += F("'>");
+  html += F("<label>Pages included</label>");
+  for (uint8_t i = 0; i < kDashboardPageCount; ++i) {
+    html += F("<label><input name='pg");
+    html += String(i);
+    html += F("' type='checkbox' value='1'");
+    html += checked((settings.autoPageMask & (1u << i)) != 0);
+    html += F(">");
+    html += String(i + 1);
+    html += F(". ");
+    html += dashboardPageName(i);
+    html += F("</label>");
+  }
+  html += F("<small>Unticked pages are skipped by the automatic change; tapping the left or right edge of the screen still reaches them. Any tap restarts the countdown, so a page being read is not pulled away.</small>");
   html += F("</div><div class='card'><h2>Display</h2>");
   html += F("<label for='bright'>Backlight brightness percent</label><input id='bright' name='bright' type='number' min='5' max='100' value='");
   html += String(settings.brightnessPercent);
@@ -398,6 +423,7 @@ void handleSave() {
   settings.timezone = limitedArg("tz", 80);
   settings.timezoneLabel = limitedArg("tzlabel", 24);
   settings.locator = limitedArg("locator", 6);
+  settings.clock12Hour = server.hasArg("clock12");
   settings.useJsonPropagationProxy = server.arg("propmode") == "json";
   settings.propagationJsonUrl = limitedArg("propurl", 180);
   const String dxMode = server.arg("dxmode");
@@ -424,6 +450,16 @@ void handleSave() {
   settings.potaRefreshMinutes = static_cast<uint16_t>(
       constrain(server.arg("potamins").toInt(), 1L, 120L));
   settings.potaExcludeRbn = server.hasArg("potarbn");
+  settings.autoPageChange = server.hasArg("autopage");
+  settings.autoPageSeconds = static_cast<uint16_t>(
+      constrain(server.arg("autosecs").toInt(), 3L, 600L));
+  uint8_t autoPageMask = 0;
+  for (uint8_t i = 0; i < kDashboardPageCount; ++i) {
+    if (server.hasArg(String("pg") + String(i))) {
+      autoPageMask |= static_cast<uint8_t>(1u << i);
+    }
+  }
+  settings.autoPageMask = autoPageMask;
   settings.brightnessPercent = static_cast<uint8_t>(
       constrain(server.arg("bright").toInt(), 5L, 100L));
   settings.swapRedBlueChannels = server.hasArg("swaprb");
