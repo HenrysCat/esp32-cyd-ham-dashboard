@@ -42,6 +42,9 @@ constexpr uint16_t kDefaultNightFadeMinutes = 40;
 constexpr uint16_t kMinNightFadeMinutes = 1;
 constexpr uint16_t kMaxNightFadeMinutes = 240;
 
+#ifndef SWAP_RED_BLUE_DEFAULT
+#define SWAP_RED_BLUE_DEFAULT false
+#endif
 #ifndef ROTATE90_DEFAULT
 #define ROTATE90_DEFAULT false
 #endif
@@ -219,7 +222,8 @@ void settingsBegin() {
       preferences.getUChar("nightpct", kDefaultNightBrightnessPercent);
   currentSettings.nightFadeMinutes =
       preferences.getUShort("nightfade", kDefaultNightFadeMinutes);
-  currentSettings.swapRedBlueChannels = preferences.getBool("swaprb", false);
+  currentSettings.swapRedBlueChannels =
+      preferences.getBool("swaprb", SWAP_RED_BLUE_DEFAULT);
   currentSettings.rotate90 = preferences.getBool("rot90", ROTATE90_DEFAULT);
   currentSettings.flip180 = preferences.getBool("flip180", FLIP180_DEFAULT);
   currentSettings.mirror = preferences.getBool("mirror", MIRROR_DEFAULT);

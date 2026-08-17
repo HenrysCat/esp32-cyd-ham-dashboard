@@ -19,6 +19,7 @@
 // fix, applied on first boot or after a factory reset. These can otherwise be
 // set per-device from the web settings page instead. Uncomment to override.
 // #define ROTATE90_DEFAULT true
+// #define SWAP_RED_BLUE_DEFAULT true
 // #define FLIP180_DEFAULT true
 // #define MIRROR_DEFAULT true
 // #define INVERT_COLOURS_DEFAULT true

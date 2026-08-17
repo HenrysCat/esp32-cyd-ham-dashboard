@@ -9,17 +9,35 @@
 
 #include "dx_spots.h"
 #include "greyline.h"
+// The 4.0" board carries a larger map. Both headers define the same width,
+// height and pixel-array identifiers, so nothing below has to know which one a
+// build selected.
+#if defined(ST7796_DRIVER)
+#include "greyline_map_460x230.h"
+#else
 #include "greyline_map.h"
+#endif
 #include "pota_spots.h"
 #include "propagation.h"
 #include "psk_reporter.h"
 #include "settings.h"
 
 namespace {
-TFT_eSPI tft(320, 240);
+TFT_eSPI tft(DISPLAY_W, DISPLAY_H);
 TFT_eSprite mapSprite(&tft);
 TFT_eSprite dxScrollSprite(&tft);
+// The XPT2046 has its own SPI pins on some CYD boards and shares the display's
+// on others. Where it shares, it must share the bus *object* too: calling
+// begin() on a second peripheral hands the display's SCLK/MOSI/MISO over to the
+// touch controller, and every panel write after that comes out as noise.
+// SUPPORT_TRANSACTIONS is mandatory on ESP32, so TFT_eSPI reapplies its own bus
+// settings after each touch read and the two can interleave safely.
+#if TOUCH_SCLK == TFT_SCLK && TOUCH_MOSI == TFT_MOSI && TOUCH_MISO == TFT_MISO
+#define TOUCH_SHARES_DISPLAY_BUS
+SPIClass& touchSpi = TFT_eSPI::getSPIinstance();
+#else
 SPIClass touchSpi(HSPI);
+#endif
 
 enum DashboardPage : uint8_t {
   kPageClock = 0,
@@ -44,8 +62,8 @@ constexpr uint32_t kRenderIntervalMs = 250;
 // Without a cap a busy telnet feed could keep the rotation parked on one page
 // indefinitely.
 constexpr uint32_t kAutoPageScrollGraceMs = 3000;
-constexpr int16_t kFooterTop = 214;
 constexpr int16_t kFooterHeight = 26;
+constexpr int16_t kFooterTop = DISPLAY_H - kFooterHeight;
 constexpr int16_t kFooterY = kFooterTop + 7;
 
 // Fixed columns for the footer when it includes the UTC field (pages 2-5).
@@ -60,15 +78,38 @@ constexpr int16_t kFooterWNtp = 50;
 constexpr int16_t kFooterXPage = 248;
 constexpr int16_t kFooterWPage = 62;
 
-constexpr int8_t kTouchSclk = 25;
-constexpr int8_t kTouchMosi = 32;
-constexpr int8_t kTouchMiso = 39;
-constexpr int8_t kTouchCs = 33;
-constexpr int8_t kTouchIrq = 36;
+constexpr int8_t kTouchSclk = TOUCH_SCLK;
+constexpr int8_t kTouchMosi = TOUCH_MOSI;
+constexpr int8_t kTouchMiso = TOUCH_MISO;
+constexpr int8_t kTouchCs = TOUCH_CS;
+constexpr int8_t kTouchIrq = TOUCH_IRQ;
 constexpr uint32_t kTouchFrequency = 2500000;
-constexpr uint16_t kTouchMin = 120;
-constexpr uint16_t kTouchMax = 3975;
-constexpr uint8_t kTouchOffsetRotation = 1;
+// How the digitiser's raw axes relate to the panel, and the raw range it
+// actually swings over. Both are properties of the glass, so each board's
+// User_Setup header supplies them; the defaults here are the ESP32-2432S028R's
+// measured values. TOUCH_RAW_MIN/MAX double as the validity filter in
+// readRawTouch, so they want a little margin outside the measured extremes
+// rather than sitting exactly on them, otherwise a hard corner press is
+// rejected instead of clamped.
+#ifndef TOUCH_RAW_MIN
+#define TOUCH_RAW_MIN 120
+#endif
+#ifndef TOUCH_RAW_MAX
+#define TOUCH_RAW_MAX 3975
+#endif
+// Screen X comes from the raw Y axis when set.
+#ifndef TOUCH_SWAP_XY
+#define TOUCH_SWAP_XY 1
+#endif
+#ifndef TOUCH_INVERT_X
+#define TOUCH_INVERT_X 0
+#endif
+#ifndef TOUCH_INVERT_Y
+#define TOUCH_INVERT_Y 1
+#endif
+
+constexpr uint16_t kTouchMin = TOUCH_RAW_MIN;
+constexpr uint16_t kTouchMax = TOUCH_RAW_MAX;
 
 constexpr uint16_t kBg = TFT_BLACK;
 constexpr uint16_t kPanel = TFT_DARKGREY;
@@ -77,10 +118,34 @@ constexpr uint16_t kMuted = TFT_LIGHTGREY;
 constexpr uint16_t kAccent = TFT_YELLOW;
 constexpr uint16_t kWarn = TFT_ORANGE;
 
-constexpr int16_t kMapX = 10;
+// Taking the map's size from the asset itself means these can never drift out
+// of step with the pixel array the way a second set of constants would. Both
+// maps are 2:1 equirectangular, so latLonToMapXY needs nothing beyond this.
+constexpr int16_t kMapW = kGreylineMapWidth;
+constexpr int16_t kMapH = kGreylineMapHeight;
+constexpr int16_t kMapX = (DISPLAY_W - kMapW) / 2;
 constexpr int16_t kMapY = 4;
-constexpr int16_t kMapW = 300;
-constexpr int16_t kMapH = 150;
+
+// A full-size 16-bit sprite for the 460x230 map would need 211,600 bytes in one
+// contiguous block, and this board reports a largest free block of about 110KB
+// before Wi-Fi is even up, so the map is composed and pushed one horizontal
+// strip at a time. That also cuts the peak allocation on the 2.8" board from
+// 90KB to 18KB, which is what used to leave no room for a TLS handshake.
+#ifndef MAP_BAND_ROWS
+#define MAP_BAND_ROWS 30
+#endif
+constexpr int16_t kMapBandH = MAP_BAND_ROWS;
+static_assert(kMapH % kMapBandH == 0,
+              "MAP_BAND_ROWS must divide the map height exactly");
+
+// The three text rows under the map on the Greyline and PSKReporter pages.
+// Hanging them off the map's bottom edge reproduces the 2.8" layout exactly
+// (4 + 150 + 6 = 160) while following the taller map down on the 4" board.
+constexpr int16_t kMapTextRow1 = kMapY + kMapH + 6;
+constexpr int16_t kMapTextRow2 = kMapTextRow1 + 18;
+constexpr int16_t kMapTextRow3 = kMapTextRow2 + 18;
+static_assert(kMapTextRow3 + 10 <= kFooterTop,
+              "map page text rows must clear the footer");
 
 // DX spots list geometry. Rows sit on a fixed 17px pitch with font 2 (16px
 // tall); the region starts a couple of pixels above the first row's text.
@@ -139,6 +204,10 @@ constexpr uint8_t kIli9341MadctlBgr = 0x08;
 DashboardPage g_currentPage = kPageClock;
 bool g_pageDirty = true;
 bool g_mapSpriteReady = false;
+// Map-space row held by the sprite's first line. Every overlay helper below
+// works in map coordinates and offsets by this, so each strip simply draws the
+// whole scene and lets the sprite clip away everything that misses.
+int16_t g_mapBandTop = 0;
 bool g_touchWasDown = false;
 uint32_t g_lastTouchActionMs = 0;
 uint32_t g_lastRenderMs = 0;
@@ -641,7 +710,7 @@ bool ensureMapSprite() {
   }
 
   mapSprite.setColorDepth(16);
-  g_mapSpriteReady = mapSprite.createSprite(kMapW, kMapH) != nullptr;
+  g_mapSpriteReady = mapSprite.createSprite(kMapW, kMapBandH) != nullptr;
   if (!g_mapSpriteReady) {
     Serial.println("Greyline map sprite allocation failed");
   }
@@ -669,10 +738,22 @@ void latLonToMapXY(double latitude, double longitude, int16_t& x, int16_t& y) {
   y = static_cast<int16_t>(((90.0 - latitude) * (kMapH - 1)) / 180.0);
 }
 
-void drawMapBackground() {
+// Map row -> row within the strip the sprite currently holds.
+inline int16_t bandY(int16_t mapY) { return mapY - g_mapBandTop; }
+
+void drawMapBandBackground() {
   mapSprite.setSwapBytes(true);
-  mapSprite.pushImage(0, 0, kGreylineMapWidth, kGreylineMapHeight,
-                      const_cast<uint16_t*>(kGreylineMapRgb565));
+  mapSprite.pushImage(0, 0, kGreylineMapWidth, kMapBandH,
+                      const_cast<uint16_t*>(
+                          kGreylineMapRgb565 +
+                          (static_cast<uint32_t>(g_mapBandTop) * kGreylineMapWidth)));
+}
+
+void pushMapBand() { mapSprite.pushSprite(kMapX, kMapY + g_mapBandTop); }
+
+void drawMapPlaceholder() {
+  tft.fillRect(kMapX, kMapY, kMapW, kMapH, kBg);
+  tft.drawRect(kMapX, kMapY, kMapW, kMapH, kPanel);
 }
 
 uint16_t darkenRgb565(uint16_t color, uint8_t percent) {
@@ -693,7 +774,10 @@ void drawNightShading(double subsolarLatitude, double subsolarLongitude) {
   const double sinSunLat = sin(sunLatRad);
   const double cosSunLat = cos(sunLatRad);
 
-  for (int16_t y = 1; y < kMapH - 1; ++y) {
+  const int16_t firstRow = max<int16_t>(1, g_mapBandTop);
+  const int16_t lastRow = min<int16_t>(kMapH - 1, g_mapBandTop + kMapBandH);
+
+  for (int16_t y = firstRow; y < lastRow; ++y) {
     const double latitude = 90.0 - ((static_cast<double>(y) * 180.0) / (kMapH - 1));
     const double latRad = latitude * DEG_TO_RAD;
     const double sinLat = sin(latRad);
@@ -705,7 +789,8 @@ void drawNightShading(double subsolarLatitude, double subsolarLongitude) {
       const double sunAltitude = (sinLat * sinSunLat) + (cosLat * cosSunLat * cos(hourAngle));
       if (sunAltitude < 0.0) {
         const uint8_t shadePercent = sunAltitude > -0.08 ? 28 : 48;
-        mapSprite.drawPixel(x, y, darkenRgb565(mapSprite.readPixel(x, y), shadePercent));
+        const int16_t sy = bandY(y);
+        mapSprite.drawPixel(x, sy, darkenRgb565(mapSprite.readPixel(x, sy), shadePercent));
       }
     }
   }
@@ -723,7 +808,7 @@ void drawTerminator(double subsolarLatitude, double subsolarLongitude) {
       int16_t x2, y2;
       latLonToMapXY(90.0, longitude, x1, y1);
       latLonToMapXY(-90.0, longitude, x2, y2);
-      mapSprite.drawLine(x1, y1, x2, y2, terminator);
+      mapSprite.drawLine(x1, bandY(y1), x2, bandY(y2), terminator);
     }
     return;
   }
@@ -740,7 +825,7 @@ void drawTerminator(double subsolarLatitude, double subsolarLongitude) {
     int16_t y;
     latLonToMapXY(latitude, lon, x, y);
     if (havePrevious) {
-      mapSprite.drawLine(previousX, previousY, x, y, terminator);
+      mapSprite.drawLine(previousX, bandY(previousY), x, bandY(y), terminator);
     }
     previousX = x;
     previousY = y;
@@ -751,36 +836,40 @@ void drawTerminator(double subsolarLatitude, double subsolarLongitude) {
 void drawQthMarker(double latitude, double longitude) {
   int16_t x, y;
   latLonToMapXY(latitude, longitude, x, y);
-  mapSprite.drawCircle(x, y, 3, kAccent);
-  mapSprite.drawFastHLine(max<int16_t>(0, x - 5), y, min<int16_t>(11, kMapW - max<int16_t>(0, x - 5)), kAccent);
-  mapSprite.drawFastVLine(x, max<int16_t>(0, y - 5), min<int16_t>(11, kMapH - max<int16_t>(0, y - 5)), kAccent);
+  mapSprite.drawCircle(x, bandY(y), 3, kAccent);
+  mapSprite.drawFastHLine(max<int16_t>(0, x - 5), bandY(y),
+                          min<int16_t>(11, kMapW - max<int16_t>(0, x - 5)), kAccent);
+  mapSprite.drawFastVLine(x, bandY(max<int16_t>(0, y - 5)),
+                          min<int16_t>(11, kMapH - max<int16_t>(0, y - 5)), kAccent);
 }
 
 void drawSunMarker(double latitude, double longitude) {
   int16_t x, y;
   latLonToMapXY(latitude, longitude, x, y);
-  mapSprite.fillCircle(x, y, 3, TFT_YELLOW);
-  mapSprite.drawCircle(x, y, 5, TFT_YELLOW);
+  mapSprite.fillCircle(x, bandY(y), 3, TFT_YELLOW);
+  mapSprite.drawCircle(x, bandY(y), 5, TFT_YELLOW);
   mapSprite.setTextDatum(TL_DATUM);
   mapSprite.setTextColor(TFT_YELLOW, mapSprite.color565(2, 12, 22));
-  mapSprite.drawString("S", min<int16_t>(x + 6, kMapW - 9), max<int16_t>(0, y - 6), 1);
+  mapSprite.drawString("S", min<int16_t>(x + 6, kMapW - 9), bandY(max<int16_t>(0, y - 6)), 1);
 }
 
 void drawGreylineMap(const GreylineData& greyline) {
   if (!ensureMapSprite()) {
-    tft.fillRect(kMapX, kMapY, kMapW, kMapH, kBg);
-    tft.drawRect(kMapX, kMapY, kMapW, kMapH, kPanel);
+    drawMapPlaceholder();
     return;
   }
 
-  drawMapBackground();
-  if (greyline.valid) {
-    drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
-    drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
-    drawQthMarker(greyline.latitudeValue, greyline.longitudeValue);
-    drawSunMarker(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+  for (g_mapBandTop = 0; g_mapBandTop < kMapH; g_mapBandTop += kMapBandH) {
+    drawMapBandBackground();
+    if (greyline.valid) {
+      drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+      drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+      drawQthMarker(greyline.latitudeValue, greyline.longitudeValue);
+      drawSunMarker(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+    }
+    pushMapBand();
   }
-  mapSprite.pushSprite(kMapX, kMapY);
+  g_mapBandTop = 0;
   releaseMapSprite();
 }
 
@@ -790,43 +879,48 @@ void drawPskMarker(double latitude, double longitude, uint8_t bandIndex) {
   int16_t x;
   int16_t y;
   latLonToMapXY(latitude, longitude, x, y);
-  mapSprite.drawCircle(x, y, 2, TFT_BLACK);
-  mapSprite.fillCircle(x, y, 1, pskBandColor(bandIndex));
+  mapSprite.drawCircle(x, bandY(y), 2, TFT_BLACK);
+  mapSprite.fillCircle(x, bandY(y), 1, pskBandColor(bandIndex));
 }
 
 void drawPskMap(const PskReporterData& psk) {
   if (!ensureMapSprite()) {
-    tft.fillRect(kMapX, kMapY, kMapW, kMapH, kBg);
-    tft.drawRect(kMapX, kMapY, kMapW, kMapH, kPanel);
+    drawMapPlaceholder();
     return;
   }
-
-  drawMapBackground();
 
   // Night shading and the day/night line both go down before the markers, so
   // reports stay at full brightness on top of them rather than being dimmed
   // along with the map. Reception reports bunch along the terminator during
   // greyline propagation, which is the point of showing it here. The shading
-  // pass costs a cos() for each of the 45000 pixels, but the subsolar point
-  // only moves once a minute, so this page redraws no more often than the
-  // Greyline page that has always carried the same cost.
+  // pass costs a cos() per map pixel, but the subsolar point only moves once a
+  // minute, so this page redraws no more often than the Greyline page that has
+  // always carried the same cost.
   const GreylineData& greyline = getGreylineData();
-  if (greyline.valid) {
-    drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
-    drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
-  }
-
-  for (uint8_t i = 0; i < psk.reportCount; ++i) {
-    const PskReport& report = psk.reports[i];
-    drawPskMarker(report.latitude, report.longitude, report.bandIndex);
-  }
 
   double qthLat;
   double qthLon;
-  if (getConfiguredLatitude(qthLat) && getConfiguredLongitude(qthLon)) {
-    drawQthMarker(qthLat, qthLon);
+  const bool haveQth =
+      getConfiguredLatitude(qthLat) && getConfiguredLongitude(qthLon);
+
+  for (g_mapBandTop = 0; g_mapBandTop < kMapH; g_mapBandTop += kMapBandH) {
+    drawMapBandBackground();
+    if (greyline.valid) {
+      drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+      drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+    }
+
+    for (uint8_t i = 0; i < psk.reportCount; ++i) {
+      const PskReport& report = psk.reports[i];
+      drawPskMarker(report.latitude, report.longitude, report.bandIndex);
+    }
+
+    if (haveQth) {
+      drawQthMarker(qthLat, qthLon);
+    }
+    pushMapBand();
   }
-  mapSprite.pushSprite(kMapX, kMapY);
+  g_mapBandTop = 0;
   releaseMapSprite();
 }
 
@@ -1395,16 +1489,16 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
     drawGreylineMap(greyline);
     g_lastGreyMap = mapSignature;
   }
-  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, 14, 160, 1, kText, 88);
-  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, 108, 160, 1, kText, 126);
-  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), 14, 178, 1, kText, 76);
-  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), 96, 178, 1, kText, 76);
-  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), 178, 178, 1, kMuted, 82);
-  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, 14, 196, 1,
+  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, 14, kMapTextRow1, 1, kText, 88);
+  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, 108, kMapTextRow1, 1, kText, 126);
+  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), 14, kMapTextRow2, 1, kText, 76);
+  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), 96, kMapTextRow2, 1, kText, 76);
+  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), 178, kMapTextRow2, 1, kMuted, 82);
+  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, 14, kMapTextRow3, 1,
                 greyline.status == "Location invalid" ? kWarn : kText, 134);
   String greylineLabel = greyline.greyline;
   greylineLabel.replace(" greyline", "");
-  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, 154, 196, 1,
+  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, 154, kMapTextRow3, 1,
                 greyline.greyline == "Not near greyline" ? kMuted : kAccent);
   drawFooter(snapshot);
 }
@@ -1436,7 +1530,7 @@ void drawPskPage(const ClockSnapshot& snapshot) {
     heading += String(psk.reportCount) + " grids / " + String(psk.totalReports) + " rpts";
     heading += ", last " + String(settings.pskWindowMinutes) + "m";
   }
-  drawLeftField(g_lastPskHeading, heading, 14, 160, 1, kText, 292);
+  drawLeftField(g_lastPskHeading, heading, 14, kMapTextRow1, 1, kText, 292);
 
   String bestLine;
   if (psk.bestDistanceKm > 0) {
@@ -1446,12 +1540,13 @@ void drawPskPage(const ClockSnapshot& snapshot) {
     bestLine = "Best: --";
   }
   bestLine += "   Upd " + (psk.updated.length() > 0 ? psk.updated.substring(0, 5) : String("--"));
-  drawLeftField(g_lastPskBest, bestLine, 14, 178, 1, psk.bestDistanceKm > 0 ? kAccent : kMuted,
+  drawLeftField(g_lastPskBest, bestLine, 14, kMapTextRow2, 1,
+                psk.bestDistanceKm > 0 ? kAccent : kMuted,
                 292);
 
   const String legendSignature = String(psk.bandMask) + "|" + psk.status;
   if (legendSignature != g_lastPskFooterLine) {
-    drawPskBandLegend(psk, 196);
+    drawPskBandLegend(psk, kMapTextRow3);
     g_lastPskFooterLine = legendSignature;
   }
   drawFooter(snapshot);
@@ -1698,16 +1793,24 @@ bool getTouchPoint(uint16_t& x, uint16_t& y) {
     return false;
   }
 
-  int16_t baseX = scaleTouch(rawX, tft.width());
-  int16_t baseY = scaleTouch(rawY, tft.height());
-
-  if (kTouchOffsetRotation == 1) {
-    x = constrain(baseY * tft.width() / tft.height(), 0, tft.width() - 1);
-    y = constrain(tft.height() - 1 - (baseX * tft.height() / tft.width()), 0, tft.height() - 1);
-  } else {
-    x = baseX;
-    y = baseY;
-  }
+  // Map the raw pair onto the panel in its unrotated orientation. The flip and
+  // mirror compensation below then accounts for however MADCTL has since been
+  // told to scan, which is a display setting the digitiser knows nothing about.
+#if TOUCH_SWAP_XY
+  int16_t screenX = scaleTouch(rawY, tft.width());
+  int16_t screenY = scaleTouch(rawX, tft.height());
+#else
+  int16_t screenX = scaleTouch(rawX, tft.width());
+  int16_t screenY = scaleTouch(rawY, tft.height());
+#endif
+#if TOUCH_INVERT_X
+  screenX = tft.width() - 1 - screenX;
+#endif
+#if TOUCH_INVERT_Y
+  screenY = tft.height() - 1 - screenY;
+#endif
+  x = constrain(screenX, 0, tft.width() - 1);
+  y = constrain(screenY, 0, tft.height() - 1);
 
   // The touch controller is wired independently of the display, so flipping
   // the screen via MADCTL does not change what a physical tap reports here.
@@ -1787,7 +1890,9 @@ void displayBegin() {
   pinMode(kTouchCs, OUTPUT);
   digitalWrite(kTouchCs, HIGH);
   pinMode(kTouchIrq, INPUT);
+#if !defined(TOUCH_SHARES_DISPLAY_BUS)
   touchSpi.begin(kTouchSclk, kTouchMiso, kTouchMosi, kTouchCs);
+#endif
 
   applyDisplaySettings();
 
@@ -1848,6 +1953,7 @@ void applyDisplaySettings() {
   tft.writecommand(kIli9341Madctl);
   tft.writedata(madctl);
   tft.endWrite();
+
 
   tft.invertDisplay(settings.invertColours);
 

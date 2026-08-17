@@ -17,6 +17,12 @@
 #define TFT_WIDTH  240
 #define TFT_HEIGHT 320
 
+// The dashboard works in landscape, so it asks TFT_eSPI for a wide canvas and
+// then sets the panel's scan order itself. These are the dimensions every page
+// lays out against.
+#define DISPLAY_W 320
+#define DISPLAY_H 240
+
 #define TFT_MISO 12
 #define TFT_MOSI 13
 #define TFT_SCLK 14
@@ -29,6 +35,9 @@
 
 // XPT2046 touch controller pins on most CYD boards. Touch is not used in
 // phase 1, but defining CS here keeps the setup ready for later page switching.
+#define TOUCH_SCLK 25
+#define TOUCH_MOSI 32
+#define TOUCH_MISO 39
 #define TOUCH_CS  33
 #define TOUCH_IRQ 36
 
