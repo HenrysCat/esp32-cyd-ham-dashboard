@@ -381,7 +381,7 @@ static_assert(DISPLAY_W < 480 ||
 // DX spots list geometry. Rows sit on a fixed 17px pitch with font 2 (16px
 // tall); the region starts a couple of pixels above the first row's text.
 constexpr int16_t kDxRowsX = 10;
-constexpr int16_t kDxRowsW = 300;
+constexpr int16_t kDxRowsW = DISPLAY_W - 20;
 constexpr int16_t kDxRowPitch = 17;
 constexpr int16_t kDxRowPad = 2;
 constexpr int16_t kDxRowTextY = 44;
@@ -389,10 +389,40 @@ constexpr int16_t kDxRowsTop = kDxRowTextY - kDxRowPad;
 // The list region stops exactly at the bottom of the last row's glyphs, so a
 // scroll frame can never expose part of the row that is falling off the end.
 constexpr int16_t kDxRowsH = kDxRowPitch * (kMaxDxSpots - 1) + 16 + kDxRowPad;
+// This page keeps font 2 on both boards. Bigger text would cost rows, and rows
+// are what the page is for; the wide panel spends its extra height on twelve of
+// them instead of eight, and its extra width on spreading the columns out.
+#if DISPLAY_W >= 480
+constexpr int16_t kDxColFreq = 14;
+constexpr int16_t kDxColCall = 110;
+constexpr int16_t kDxColMode = 250;
+constexpr int16_t kDxColTime = 340;
+constexpr int16_t kDxUpdatedY = 254;
+constexpr int16_t kDxStatusY = 276;
+constexpr int16_t kDxUpdatedW = 220;
+constexpr int16_t kDxSourceX = 240;
+constexpr int16_t kDxSourceW = 232;
+#else
 constexpr int16_t kDxColFreq = 14;
 constexpr int16_t kDxColCall = 82;
 constexpr int16_t kDxColMode = 170;
 constexpr int16_t kDxColTime = 230;
+constexpr int16_t kDxUpdatedY = 186;
+constexpr int16_t kDxStatusY = 204;
+constexpr int16_t kDxUpdatedW = 144;
+constexpr int16_t kDxSourceX = 158;
+constexpr int16_t kDxSourceW = 158;
+#endif
+constexpr int16_t kDxUpdatedX = 8;
+constexpr int16_t kDxStatusW = DISPLAY_W - 12;
+static_assert(kDxRowsTop + kDxRowsH <= kDxUpdatedY - 6,
+              "the spot rows must clear the updated/source line");
+static_assert(kDxUpdatedX + kDxUpdatedW <= kDxSourceX,
+              "the Updated and Source boxes must not overlap");
+// The status row is font 1, so its clear is 12 tall starting two above the
+// text. The 2.8" board ends it on the very last row before the footer rule.
+static_assert(kDxStatusY - 2 + 12 <= kFooterTop,
+              "the spots status row must clear the footer");
 
 // POTA reuses the DX row geometry, but trades the time column for the park
 // reference, which is what a hunter needs in order to log the contact.
@@ -1972,22 +2002,23 @@ void drawDxPage(const ClockSnapshot& snapshot) {
   if (g_pageDirty) {
     tft.fillScreen(kBg);
     drawCentered("DX Spots", 4, 4, kAccent);
-    drawLeft("Freq", 14, 24, 2, kMuted);
-    drawLeft("Call", 82, 24, 2, kMuted);
-    drawLeft("Mode", 170, 24, 2, kMuted);
-    drawLeft("UTC", 230, 24, 2, kMuted);
+    drawLeft("Freq", kDxColFreq, 24, 2, kMuted);
+    drawLeft("Call", kDxColCall, 24, 2, kMuted);
+    drawLeft("Mode", kDxColMode, 24, 2, kMuted);
+    drawLeft("UTC", kDxColTime, 24, 2, kMuted);
   }
 
   updateDxRows(dx);
 
-  drawLeftField(g_lastDxUpdated, "Updated: " + dx.updated, 8, 186, 2, kMuted, 144);
-  drawLeftField(g_lastDxSource, "Source: " + dx.provider, 158, 186, 2,
-                dx.source == "Last good" ? kWarn : kAccent, 158);
-  drawLeftField(g_lastDxStatus, "Status: " + dx.status, 8, 204, 1,
+  drawLeftField(g_lastDxUpdated, "Updated: " + dx.updated, kDxUpdatedX, kDxUpdatedY, 2, kMuted,
+                kDxUpdatedW);
+  drawLeftField(g_lastDxSource, "Source: " + dx.provider, kDxSourceX, kDxUpdatedY, 2,
+                dx.source == "Last good" ? kWarn : kAccent, kDxSourceW);
+  drawLeftField(g_lastDxStatus, "Status: " + dx.status, kDxUpdatedX, kDxStatusY, 1,
                 dx.status == "OK" || dx.status == "Connected" || dx.status == "Reading"
                     ? kAccent
                     : kWarn,
-                308);
+                kDxStatusW);
   drawFooter(snapshot);
 }
 
@@ -2005,7 +2036,8 @@ void drawPotaPage(const ClockSnapshot& snapshot) {
 
   updatePotaRows(pota);
 
-  drawLeftField(g_lastPotaUpdated, "Updated: " + pota.updated, 8, 186, 2, kMuted, 144);
+  drawLeftField(g_lastPotaUpdated, "Updated: " + pota.updated, kDxUpdatedX, kDxUpdatedY, 2,
+                kMuted, kDxUpdatedW);
 
   String summary = "Status: " + pota.status;
   if (pota.totalSpots > 0) {
@@ -2014,7 +2046,8 @@ void drawPotaPage(const ClockSnapshot& snapshot) {
       summary += "   " + String(pota.filteredOut) + " filtered";
     }
   }
-  drawLeftField(g_lastPotaStatus, summary, 8, 204, 1, pota.status == "OK" ? kAccent : kWarn, 308);
+  drawLeftField(g_lastPotaStatus, summary, kDxUpdatedX, kDxStatusY, 1,
+                pota.status == "OK" ? kAccent : kWarn, kDxStatusW);
   drawFooter(snapshot);
 }
 
@@ -2255,23 +2288,27 @@ void handleTouch() {
     if ((g_currentPage == kPagePropagation || g_currentPage == kPageVhf) &&
         x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestPropagationRefresh();
+      // These acknowledgements go in the same box the page's own Status field
+      // uses, so they must follow the same geometry rather than repeat it.
       if (g_currentPage == kPagePropagation) {
         g_lastPropStatus = "";
-        drawLeftField(g_lastPropStatus, "Status: Refreshing", 166, 194, 2, kMuted);
+        drawPropStatusField(g_lastPropStatus, "Status: Refreshing", kMuted);
       } else {
         g_lastVhfStatus = "";
-        drawLeftField(g_lastVhfStatus, "Status: Refreshing", 166, 194, 2, kMuted);
+        drawPropStatusField(g_lastVhfStatus, "Status: Refreshing", kMuted);
       }
     } else if (g_currentPage == kPageDx &&
                x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestDxSpotsRefresh();
       g_lastDxStatus = "";
-      drawLeftField(g_lastDxStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
+      drawLeftField(g_lastDxStatus, "Status: Refreshing", kDxUpdatedX, kDxStatusY, 1, kMuted,
+                    kDxStatusW);
     } else if (g_currentPage == kPagePota &&
                x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       requestPotaSpotsRefresh();
       g_lastPotaStatus = "";
-      drawLeftField(g_lastPotaStatus, "Status: Refreshing", 8, 204, 1, kMuted, 308);
+      drawLeftField(g_lastPotaStatus, "Status: Refreshing", kDxUpdatedX, kDxStatusY, 1, kMuted,
+                    kDxStatusW);
     } else if (g_currentPage == kPagePsk &&
                x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
       // The request is queued rather than run now: the PSKReporter module holds

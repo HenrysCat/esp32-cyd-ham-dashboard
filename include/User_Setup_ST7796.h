@@ -8,10 +8,15 @@
 // from the 2.8" ESP32-2432S028R is the backlight, which moves from GPIO 21 to
 // GPIO 27.
 //
-// SPI_FREQUENCY matters here: this panel produces nothing but random coloured
-// pixels at the 40MHz the 2.8" board runs at, because the controller never
-// completes its init sequence. 27MHz is stable. If a future board of this type
-// shows the same noise, drop the clock before suspecting anything else.
+// SPI_FREQUENCY matters here, but the clock was never the real problem. This
+// panel showed nothing but random coloured pixels at 40MHz and was run at 27MHz
+// for a while because of it; the actual fault was the SPI port, and with
+// USE_HSPI_PORT set below it is stable at 80MHz. See the note next to it.
+//
+// If a board of this type shows that noise, check the port before dropping the
+// clock. Dropping the clock hides the symptom and costs about a third of the
+// draw rate: the spot list scroll pushes 94,300 pixels a frame, which is 56ms
+// at 27MHz against 19ms at 80MHz, or 17fps against 53fps.
 
 #define ST7796_DRIVER
 
@@ -70,6 +75,20 @@
 #define LOAD_GFXFF
 #define SMOOTH_FONT
 
-#define SPI_FREQUENCY       27000000
+// MISO 12, MOSI 13, SCLK 14 and CS 15 are the ESP32's native HSPI pins, so
+// asking for the HSPI peripheral lets the signals go out through IOMUX. Without
+// this TFT_eSPI uses VSPI, which has to route them through the GPIO matrix: that
+// adds propagation delay and stops being reliable right around 40MHz, which is
+// what the coloured noise was. The touch controller shares this bus and picks
+// the port up automatically through TFT_eSPI::getSPIinstance().
+//
+// 80MHz is the top of the range rather than a number worth tuning: the ESP32
+// divides the 80MHz APB clock by an integer of 2 or more, so the only steps
+// below it are 40, 26.7 and 20MHz. Asking for anything between 40 and 80 gets
+// rounded down to 40. Reads stay slow because they are far more marginal than
+// writes, and this board does not wire MISO back from the panel anyway.
+#define USE_HSPI_PORT
+
+#define SPI_FREQUENCY       80000000
 #define SPI_READ_FREQUENCY  16000000
 #define SPI_TOUCH_FREQUENCY 2500000
