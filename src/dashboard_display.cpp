@@ -2,6 +2,10 @@
 
 #include <SPI.h>
 #include <TFT_eSPI.h>
+// TFT_eSPI's gfxfont.h already declares every GFX free font, and the linker
+// discards the ones a build does not reference, so FreeSans18pt7b needs no
+// include of its own - adding one is a redefinition, as those Adafruit headers
+// carry no include guards.
 #include <WiFi.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,14 +73,33 @@ constexpr int16_t kFooterY = kFooterTop + 7;
 // Fixed columns for the footer when it includes the UTC field (pages 2-5).
 // Each field's text has a constant character count between states (e.g.
 // "WiFi OK" / "WiFi --"), so these boxes never need to shift or resize.
-constexpr int16_t kFooterXUtc = 14;
+//
+// The field widths are the same on both panels because the footer keeps font 2
+// either way - it is deliberately the quiet line on the page. Only the gaps
+// change: the four boxes total 233px, so the wide panel has 219px to spread
+// between them against the small one's 59px, which is 73px a gap rather than
+// 21px. Without that the whole row sits in the left two thirds of the glass.
 constexpr int16_t kFooterWUtc = 69;
-constexpr int16_t kFooterXWifi = 104;
 constexpr int16_t kFooterWWifi = 52;
-constexpr int16_t kFooterXNtp = 177;
 constexpr int16_t kFooterWNtp = 50;
-constexpr int16_t kFooterXPage = 248;
 constexpr int16_t kFooterWPage = 62;
+#if DISPLAY_W >= 480
+constexpr int16_t kFooterXUtc = 14;
+constexpr int16_t kFooterXWifi = 156;
+constexpr int16_t kFooterXNtp = 281;
+constexpr int16_t kFooterXPage = 404;
+#else
+constexpr int16_t kFooterXUtc = 14;
+constexpr int16_t kFooterXWifi = 104;
+constexpr int16_t kFooterXNtp = 177;
+constexpr int16_t kFooterXPage = 248;
+#endif
+static_assert(kFooterXUtc + kFooterWUtc <= kFooterXWifi &&
+                  kFooterXWifi + kFooterWWifi <= kFooterXNtp &&
+                  kFooterXNtp + kFooterWNtp <= kFooterXPage,
+              "the footer fields must not overlap each other");
+static_assert(kFooterXPage + kFooterWPage <= DISPLAY_W - 10,
+              "the last footer field must stay inside the right margin");
 
 constexpr int8_t kTouchSclk = TOUCH_SCLK;
 constexpr int8_t kTouchMosi = TOUCH_MOSI;
@@ -146,6 +169,186 @@ constexpr int16_t kMapTextRow2 = kMapTextRow1 + 18;
 constexpr int16_t kMapTextRow3 = kMapTextRow2 + 18;
 static_assert(kMapTextRow3 + 10 <= kFooterTop,
               "map page text rows must clear the footer");
+
+// Clock page geometry. Both panels work out at roughly 143 PPI, so a given
+// pixel size looks the same on each; the 4.0" board is not given bigger text
+// because it needs it, but because the extra room lets the headline clock be
+// read from further away.
+//
+// Font 7 is the seven-segment face and stays the headline clock on both
+// panels; the wide one simply draws it at double size, which textWidth and
+// fontHeight both honour. Font 8 is not a bigger version of it - it is 75px of
+// Arial - so scaling font 7 is the only way to keep the digital look. At size
+// 2 that is 96px tall and 432px wide for "12:34:56", inside 480 with a margin.
+// The local time keeps font 4 whatever the panel, because it is prefixed with
+// the timezone label and fonts 6 to 8 carry only digits, colon, dot and minus.
+constexpr uint8_t kClockUtcFont = 7;
+#if DISPLAY_H >= 320
+constexpr uint8_t kClockUtcSize = 2;
+constexpr const GFXfont* kClockTextFont = &FreeSans18pt7b;
+constexpr int16_t kClockLabelY = 2;
+constexpr int16_t kClockUtcY = 22;
+constexpr int16_t kClockLocalY = 126;
+constexpr int16_t kClockDateY = 176;
+constexpr int16_t kClockStationY = 226;
+constexpr int16_t kClockIpY = 276;
+constexpr int16_t kClockUptimeY = 276;  // shares the row with the IP
+#else
+constexpr uint8_t kClockUtcSize = 1;
+constexpr const GFXfont* kClockTextFont = nullptr;
+constexpr int16_t kClockLabelY = 3;
+constexpr int16_t kClockUtcY = 20;
+constexpr int16_t kClockLocalY = 86;
+constexpr int16_t kClockDateY = 120;
+constexpr int16_t kClockStationY = 152;
+constexpr int16_t kClockIpY = 176;
+constexpr int16_t kClockUptimeY = 194;
+#endif
+// 8 characters of font 7 at this size, against the panel width.
+static_assert(kClockUtcSize * 216 <= DISPLAY_W - 16,
+              "the UTC readout must fit the panel with a margin");
+static_assert(kClockIpY + 16 <= kFooterTop,
+              "the clock page diagnostics row must clear the footer");
+// The three rows under the clock use a GFX free font on the wide panel rather
+// than font 4 at double size. Doubling is nearest-neighbour, so it magnifies
+// the jagged edges along with everything else; FreeSans18pt7b is drawn at its
+// own size. It is also smaller (42px line against 52px) and narrower, which is
+// what lets the callsign row grow at all: "M9LHX   Locator: JO01AB" is 408px
+// here against 572px doubled, so it now fits with its label intact.
+static_assert(kClockUptimeY + 16 <= kFooterTop,
+              "clock page rows must clear the footer");
+
+// Greyline page columns. The 2.8" values are the ones this page has always
+// used, irregular widths and all. The 4.0" board spreads the same seven fields
+// into three tidy columns across the wider panel, and gives Status enough room
+// to clear its longest string: "Status: Location invalid" is 24 characters at
+// 6px in font 1 = 144px, which the small board's 134px clear cannot cover, so
+// a sliver of it survives when the status later shortens. There is no room to
+// fix that at 320px wide - the Greyline field starts at x=154 and the string
+// would reach x=158 - so the narrow panel keeps its existing behaviour.
+#if DISPLAY_W >= 480
+constexpr int16_t kGreyQthX = 14;
+constexpr int16_t kGreyQthW = 160;
+constexpr int16_t kGreySunX = 180;
+constexpr int16_t kGreySunW = 280;
+constexpr int16_t kGreyRiseX = 14;
+constexpr int16_t kGreyRiseW = 160;
+constexpr int16_t kGreySetX = 180;
+constexpr int16_t kGreySetW = 150;
+constexpr int16_t kGreyUtcX = 340;
+constexpr int16_t kGreyUtcW = 120;
+constexpr int16_t kGreyStatusX = 14;
+constexpr int16_t kGreyStatusW = 160;
+constexpr int16_t kGreyGreylineX = 180;
+constexpr int16_t kGreyGreylineW = 280;
+#else
+constexpr int16_t kGreyQthX = 14;
+constexpr int16_t kGreyQthW = 88;
+constexpr int16_t kGreySunX = 108;
+constexpr int16_t kGreySunW = 126;
+constexpr int16_t kGreyRiseX = 14;
+constexpr int16_t kGreyRiseW = 76;
+constexpr int16_t kGreySetX = 96;
+constexpr int16_t kGreySetW = 76;
+constexpr int16_t kGreyUtcX = 178;
+constexpr int16_t kGreyUtcW = 82;
+constexpr int16_t kGreyStatusX = 14;
+constexpr int16_t kGreyStatusW = 134;
+constexpr int16_t kGreyGreylineX = 154;
+constexpr int16_t kGreyGreylineW = -1;  // runs to the right edge
+#endif
+static_assert(DISPLAY_W < 480 || kGreyStatusW >= 24 * 6,
+              "Status must clear \"Status: Location invalid\" on the wide panel");
+
+// Propagation and VHF page geometry. The two pages share a skeleton: a title, a
+// panel of solar readings, a panel of condition rows, then an updated/status
+// line above the footer. The 2.8" numbers are the ones these pages have always
+// used and every one of them is reproduced exactly. The 4.0" board moves the
+// body text from font 2 to font 4 and opens the row pitch to match, which is
+// what the extra height is worth spending on: the readings are the point of
+// both pages and they were set at 16px on a panel that can afford 26px.
+//
+// Font 4 fits horizontally with room to spare. The longest reading row,
+// "Noise S9   Aurora 10   SW 999   Bz -99.9", measures 430px against the 464
+// usable, and the widest condition label, "Es NorthAm 2m", is 175px inside a
+// 192px column.
+#if DISPLAY_W >= 480
+constexpr uint8_t kPropBodyFont = 4;
+constexpr int16_t kPropPanelATop = 34;
+constexpr int16_t kPropPanelAH = 96;
+constexpr int16_t kPropReadRowY = 40;
+constexpr int16_t kPropReadPitch = 30;
+constexpr int16_t kPropPanelBTop = 134;
+constexpr int16_t kPropPanelBH = 140;
+constexpr int16_t kPropHeadY = 138;
+constexpr int16_t kPropRowY = 160;
+constexpr int16_t kPropRowPitch = 27;
+constexpr int16_t kVhfRowY = 138;
+constexpr int16_t kVhfRowPitch = 26;
+constexpr int16_t kPropStatusY = 276;
+constexpr int16_t kPropStatusX = 244;
+constexpr int16_t kCondSplit1 = 200;
+constexpr int16_t kCondSplit2 = 340;
+#else
+constexpr uint8_t kPropBodyFont = 2;
+constexpr int16_t kPropPanelATop = 30;
+constexpr int16_t kPropPanelAH = 58;
+constexpr int16_t kPropReadRowY = 36;
+constexpr int16_t kPropReadPitch = 18;
+constexpr int16_t kPropPanelBTop = 88;
+constexpr int16_t kPropPanelBH = 104;
+constexpr int16_t kPropHeadY = 92;
+constexpr int16_t kPropRowY = 112;
+constexpr int16_t kPropRowPitch = 20;
+constexpr int16_t kVhfRowY = 92;
+constexpr int16_t kVhfRowPitch = 20;
+constexpr int16_t kPropStatusY = 194;
+constexpr int16_t kPropStatusX = 164;
+constexpr int16_t kCondSplit1 = 112;
+constexpr int16_t kCondSplit2 = 216;
+#endif
+// The glyph height of the body font, which the row fitting below is checked
+// against. Only fonts 2 and 4 are ever selected here.
+constexpr int16_t kPropBodyH = (kPropBodyFont == 4) ? 26 : 16;
+constexpr int16_t kPropPanelBBottom = kPropPanelBTop + kPropPanelBH;
+// Day and Night are centred in their columns, and this arithmetic reproduces
+// the 2.8" board's long standing 164 and 266.
+constexpr int16_t kCondDayX = (kCondSplit1 + kCondSplit2) / 2;
+constexpr int16_t kCondNightX = (kCondSplit2 + DISPLAY_W - 4) / 2;
+constexpr int16_t kPropUpdatedX = 8;
+constexpr int16_t kPropUpdatedW = kPropStatusX - kPropUpdatedX - 6;
+constexpr int16_t kPropStatusW = DISPLAY_W - kPropStatusX - 4;
+static_assert(kPropReadRowY + 2 * kPropReadPitch + kPropBodyH <= kPropPanelATop + kPropPanelAH,
+              "the three reading rows must fit the readings panel");
+static_assert(kPropRowY + 3 * kPropRowPitch + kPropBodyH <= kPropPanelBBottom,
+              "the four band rows must fit the conditions panel");
+static_assert(kVhfRowY + 4 * kVhfRowPitch + kPropBodyH <= kPropPanelBBottom,
+              "the five VHF rows must fit the conditions panel");
+static_assert(kPropHeadY + 16 <= kPropRowY,
+              "the Band/Day/Night headings must clear the first band row");
+static_assert(kPropPanelBBottom <= kPropStatusY - 2,
+              "the conditions panel must clear the updated/status row");
+static_assert(kPropStatusY + 16 <= kFooterTop,
+              "the updated/status row must clear the footer");
+// Status is left aligned at kPropStatusX on the narrow panel and right aligned
+// to the margin on the wide one, so its clear box starts in a different place.
+static_assert(kPropUpdatedX + kPropUpdatedW <=
+                  (DISPLAY_W >= 480 ? DISPLAY_W - 8 - kPropStatusW : kPropStatusX),
+              "the Updated and Status boxes must not overlap");
+// A row's clear is two pixels taller than its glyphs, so its last painted row
+// is y + glyph height + 1. Reaching a panel border rubs that border out for
+// good, because only panel B's top edge is repainted on every pass. The 2.8"
+// board does overlap panel A's bottom edge, but there the two boxes share that
+// edge and the drawFastHLine puts it straight back, so it keeps its geometry.
+static_assert(DISPLAY_W < 480 || kPropReadRowY + 2 * kPropReadPitch + kPropBodyH + 1 <=
+                                     kPropPanelATop + kPropPanelAH - 2,
+              "the last reading row's clear must not reach the readings panel border");
+static_assert(DISPLAY_W < 480 ||
+                  kPropRowY + 3 * kPropRowPitch + kPropBodyH + 1 <= kPropPanelBBottom - 2,
+              "the last band row's clear must not reach the conditions panel border");
+static_assert(DISPLAY_W < 480 ||
+                  kVhfRowY + 4 * kVhfRowPitch + kPropBodyH + 1 <= kPropPanelBBottom - 2,
+              "the last VHF row's clear must not reach the conditions panel border");
 
 // DX spots list geometry. Rows sit on a fixed 17px pitch with font 2 (16px
 // tall); the region starts a couple of pixels above the first row's text.
@@ -420,7 +623,8 @@ void drawLeft(const String& text, int16_t x, int16_t y, uint8_t font, uint16_t c
 }
 
 void drawCenteredField(String& last, const String& value, int16_t y, uint8_t font,
-                       uint16_t color = kText, int16_t x = -1, int16_t w = -1) {
+                       uint16_t color = kText, int16_t x = -1, int16_t w = -1,
+                       uint8_t size = 1, const GFXfont* freeFont = nullptr) {
   if (value == last) {
     return;
   }
@@ -432,6 +636,14 @@ void drawCenteredField(String& last, const String& value, int16_t y, uint8_t fon
     w = tft.width();
   }
 
+  // A free font is selected as font 1, and textWidth and fontHeight both
+  // report its metrics once it is, so the centring and the clear rectangle
+  // below stay correct either way. textsize scales both as well.
+  if (freeFont != nullptr) {
+    tft.setFreeFont(freeFont);
+    font = 1;
+  }
+  tft.setTextSize(size);
   const int16_t h = tft.fontHeight(font) + 4;
   if (tft.textWidth(value, font) != tft.textWidth(last, font)) {
     tft.fillRect(x, y - 2, w, h, kBg);
@@ -439,7 +651,89 @@ void drawCenteredField(String& last, const String& value, int16_t y, uint8_t fon
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(color, kBg);
   tft.drawString(value, x + (w / 2), y, font);
+  tft.setTextSize(1);
+  if (freeFont != nullptr) {
+    tft.setFreeFont(nullptr);
+  }
   last = value;
+}
+
+// Draws "label value" with the gap between the two centred on the panel, so
+// the value is left aligned from a fixed x and cannot drift sideways as its
+// width changes. A centred clock does drift: 12 hour time drops the leading
+// zero, so "7:24:31 AM" is a digit narrower than "12:24:31 AM".
+void drawSplitField(String& last, const String& label, const String& value, int16_t y,
+                    uint8_t font, uint16_t color = kText, uint8_t size = 1,
+                    const GFXfont* freeFont = nullptr) {
+  const String combined = label + '\t' + value;
+  if (combined == last) {
+    return;
+  }
+
+  if (freeFont != nullptr) {
+    tft.setFreeFont(freeFont);
+    font = 1;
+  }
+  tft.setTextSize(size);
+
+  // A lone space measures zero, because textWidth() uses the glyph outline
+  // rather than the advance for the last character of a string and a space has
+  // no outline. Measuring it between two glyphs returns the advance we want.
+  const int16_t gap = tft.textWidth(" x", font) - tft.textWidth("x", font);
+  const int16_t centre = tft.width() / 2;
+  const int16_t valueX = centre + (gap / 2);
+  const int16_t valueW = tft.width() - valueX;
+
+  // yAdvance is the font's own line height, so it allows for descenders however
+  // little of the string happens to use them. fontHeight() would not: the free
+  // font metrics it reports are those of the last string measured.
+  const int16_t h = (freeFont != nullptr)
+                        ? static_cast<int16_t>(pgm_read_byte(&freeFont->yAdvance) * size + 4)
+                        : static_cast<int16_t>(tft.fontHeight(font) + 4);
+
+  const int16_t split = last.indexOf('\t');
+  const String lastLabel = (split >= 0) ? last.substring(0, split) : String();
+
+  // Redrawing the label every second is what makes the line blink, since a free
+  // font fills its whole bounding box before it draws the glyphs. It only needs
+  // touching when it actually changes, which is at most twice a year.
+  if (label != lastLabel) {
+    if (tft.textWidth(label, font) < tft.textWidth(lastLabel, font)) {
+      tft.fillRect(0, y - 2, centre, h, kBg);
+    }
+    tft.setTextColor(color, kBg);
+    tft.setTextDatum(TR_DATUM);
+    tft.drawString(label, centre - (gap / 2), y, font);
+  }
+
+  // The value is built off screen and pushed in one blit, so that background
+  // fill never appears on the panel. The sprite spans the full width to the
+  // right edge, which clears a longer previous value on the way past.
+  TFT_eSprite field(&tft);
+  field.setColorDepth(16);
+  if (field.createSprite(valueW, h) != nullptr) {
+    field.fillSprite(kBg);
+    if (freeFont != nullptr) {
+      field.setFreeFont(freeFont);
+    }
+    field.setTextSize(size);
+    field.setTextColor(color, kBg);
+    field.setTextDatum(TL_DATUM);
+    field.drawString(value, 0, 0, font);
+    field.pushSprite(valueX, y);
+    field.deleteSprite();
+  } else {
+    tft.fillRect(valueX, y - 2, valueW, h, kBg);
+    tft.setTextColor(color, kBg);
+    tft.setTextDatum(TL_DATUM);
+    tft.drawString(value, valueX, y, font);
+  }
+
+  tft.setTextSize(1);
+  if (freeFont != nullptr) {
+    tft.setFreeFont(nullptr);
+  }
+  last = combined;
 }
 
 void drawLeftField(String& last, const String& value, int16_t x, int16_t y,
@@ -458,6 +752,40 @@ void drawLeftField(String& last, const String& value, int16_t x, int16_t y,
   tft.setTextColor(color, kBg);
   tft.drawString(value, x, y, font);
   last = value;
+}
+
+// As drawLeftField, but the text ends at right rather than starting at x. The
+// box still clears w pixels, so it is given the same width its left aligned
+// counterpart would have had.
+void drawRightField(String& last, const String& value, int16_t right, int16_t y,
+                    uint8_t font, uint16_t color = kText, int16_t w = -1) {
+  if (value == last) {
+    return;
+  }
+
+  if (w < 0) {
+    w = right;
+  }
+
+  const int16_t h = tft.fontHeight(font) + 4;
+  tft.fillRect(right - w, y - 2, w, h, kBg);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(color, kBg);
+  tft.drawString(value, right, y, font);
+  last = value;
+}
+
+// The Status field on the propagation and VHF pages. It stays left aligned in
+// its box on the narrow panel, which is how it has always sat there, and is
+// pushed out to the right margin on the wide one. Both fields are short, so
+// left aligning them at the half way mark leaves the right third of a 480px
+// row empty; anchoring one to each edge fills the line the way it does at 320.
+void drawPropStatusField(String& last, const String& value, uint16_t color) {
+#if DISPLAY_W >= 480
+  drawRightField(last, value, DISPLAY_W - 8, kPropStatusY, 2, color, kPropStatusW);
+#else
+  drawLeftField(last, value, kPropStatusX, kPropStatusY, 2, color, kPropStatusW);
+#endif
 }
 
 uint16_t conditionColor(const String& condition) {
@@ -564,33 +892,38 @@ uint16_t qualitativeReadingColor(const String& reading, const char* parameter) {
 
 void drawReading(int16_t& x, int16_t y, const String& label, const String& value,
                  uint16_t color) {
-  drawLeft(label, x, y, 2, kText);
-  x += tft.textWidth(label, 2);
-  drawLeft(value, x, y, 2, color);
-  x += tft.textWidth(value, 2);
+  drawLeft(label, x, y, kPropBodyFont, kText);
+  x += tft.textWidth(label, kPropBodyFont);
+  drawLeft(value, x, y, kPropBodyFont, color);
+  x += tft.textWidth(value, kPropBodyFont);
 }
 
 void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastNoise,
                         const PropagationData& propagation) {
+  constexpr int16_t kRow1 = kPropReadRowY;
+  constexpr int16_t kRow2 = kPropReadRowY + kPropReadPitch;
+  constexpr int16_t kRow3 = kPropReadRowY + 2 * kPropReadPitch;
+  constexpr int16_t kClearW = DISPLAY_W - 16;
+
   const String sfiXray = "SFI " + propagation.sfi + "   A " + propagation.aIndex +
                          "   K " + propagation.kIndex + "   X-Ray " + propagation.xray;
   if (sfiXray != lastSfiXray) {
-    tft.fillRect(8, 34, 304, tft.fontHeight(2) + 4, kBg);
+    tft.fillRect(8, kRow1 - 2, kClearW, tft.fontHeight(kPropBodyFont) + 4, kBg);
     int16_t x = 8;
-    drawReading(x, 36, "SFI ", propagation.sfi, readingColor(propagation.sfi, "SFI"));
-    drawReading(x, 36, "   A ", propagation.aIndex, readingColor(propagation.aIndex, "A"));
-    drawReading(x, 36, "   K ", propagation.kIndex, readingColor(propagation.kIndex, "K"));
-    drawReading(x, 36, "   X-Ray ", propagation.xray, readingColor(propagation.xray, "X-Ray"));
+    drawReading(x, kRow1, "SFI ", propagation.sfi, readingColor(propagation.sfi, "SFI"));
+    drawReading(x, kRow1, "   A ", propagation.aIndex, readingColor(propagation.aIndex, "A"));
+    drawReading(x, kRow1, "   K ", propagation.kIndex, readingColor(propagation.kIndex, "K"));
+    drawReading(x, kRow1, "   X-Ray ", propagation.xray, readingColor(propagation.xray, "X-Ray"));
     lastSfiXray = sfiXray;
   }
 
   const String sunspots = "Sunspots " + propagation.sunspots + "   Geomag " + propagation.geomag;
   if (sunspots != lastSunspots) {
-    tft.fillRect(8, 52, 304, tft.fontHeight(2) + 4, kBg);
+    tft.fillRect(8, kRow2 - 2, kClearW, tft.fontHeight(kPropBodyFont) + 4, kBg);
     int16_t x = 8;
-    drawReading(x, 54, "Sunspots ", propagation.sunspots,
+    drawReading(x, kRow2, "Sunspots ", propagation.sunspots,
                 readingColor(propagation.sunspots, "SN"));
-    drawReading(x, 54, "   Geomag ", propagation.geomag,
+    drawReading(x, kRow2, "   Geomag ", propagation.geomag,
                 qualitativeReadingColor(propagation.geomag, "Geomag"));
     lastSunspots = sunspots;
   }
@@ -598,15 +931,15 @@ void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastN
   const String noise = "Noise " + propagation.signalNoise + "   Aurora " + propagation.aurora +
                        "   SW " + propagation.solarWind + "   Bz " + propagation.bz;
   if (noise != lastNoise) {
-    tft.fillRect(8, 70, 304, tft.fontHeight(2) + 4, kBg);
+    tft.fillRect(8, kRow3 - 2, kClearW, tft.fontHeight(kPropBodyFont) + 4, kBg);
     int16_t x = 8;
-    drawReading(x, 72, "Noise ", propagation.signalNoise,
+    drawReading(x, kRow3, "Noise ", propagation.signalNoise,
                 qualitativeReadingColor(propagation.signalNoise, "Noise"));
-    drawReading(x, 72, "   Aurora ", propagation.aurora,
+    drawReading(x, kRow3, "   Aurora ", propagation.aurora,
                 qualitativeReadingColor(propagation.aurora, "Aurora"));
-    drawReading(x, 72, "   SW ", propagation.solarWind,
+    drawReading(x, kRow3, "   SW ", propagation.solarWind,
                 readingColor(propagation.solarWind, "SW"));
-    drawReading(x, 72, "   Bz ", propagation.bz, readingColor(propagation.bz, "Bz"));
+    drawReading(x, kRow3, "   Bz ", propagation.bz, readingColor(propagation.bz, "Bz"));
     lastNoise = noise;
   }
 }
@@ -614,7 +947,7 @@ void drawTopReadingRows(String& lastSfiXray, String& lastSunspots, String& lastN
 void drawConditionValue(const String& value, int16_t center, int16_t y) {
   tft.setTextDatum(TC_DATUM);
   tft.setTextColor(conditionColor(value), kBg);
-  tft.drawString(value, center, y, 2);
+  tft.drawString(value, center, y, kPropBodyFont);
 }
 
 void drawConditionRow(String& last, const String& label, const String& day,
@@ -625,13 +958,13 @@ void drawConditionRow(String& last, const String& label, const String& day,
   }
 
   const int16_t rowTop = y - 2;
-  const int16_t rowHeight = tft.fontHeight(2) + 4;
+  const int16_t rowHeight = tft.fontHeight(kPropBodyFont) + 4;
   tft.fillRect(5, rowTop, tft.width() - 10, rowHeight, kBg);
-  tft.drawFastVLine(112, rowTop, rowHeight, kPanel);
-  tft.drawFastVLine(216, rowTop, rowHeight, kPanel);
-  drawLeft(label, 8, y, 2, kText);
-  drawConditionValue(day, 164, y);
-  drawConditionValue(night, 266, y);
+  tft.drawFastVLine(kCondSplit1, rowTop, rowHeight, kPanel);
+  tft.drawFastVLine(kCondSplit2, rowTop, rowHeight, kPanel);
+  drawLeft(label, 8, y, kPropBodyFont, kText);
+  drawConditionValue(day, kCondDayX, y);
+  drawConditionValue(night, kCondNightX, y);
   last = value;
 }
 
@@ -658,12 +991,12 @@ void drawVhfConditionRow(String& last, const String& label, const String& value,
   }
 
   const int16_t rowTop = y - 2;
-  const int16_t rowHeight = tft.fontHeight(2) + 4;
+  const int16_t rowHeight = tft.fontHeight(kPropBodyFont) + 4;
   tft.fillRect(5, rowTop, tft.width() - 10, rowHeight, kBg);
-  drawLeft(label, 8, y, 2, kText);
+  drawLeft(label, 8, y, kPropBodyFont, kText);
   tft.setTextDatum(TR_DATUM);
   tft.setTextColor(vhfConditionColor(value), kBg);
-  tft.drawString(value, tft.width() - 12, y, 2);
+  tft.drawString(value, tft.width() - 12, y, kPropBodyFont);
   last = combined;
 }
 
@@ -687,20 +1020,20 @@ void drawVhfAuroraRow(String& last, const String& status, const String& lat, int
   }
 
   const int16_t rowTop = y - 2;
-  const int16_t rowHeight = tft.fontHeight(2) + 4;
+  const int16_t rowHeight = tft.fontHeight(kPropBodyFont) + 4;
   tft.fillRect(5, rowTop, tft.width() - 10, rowHeight, kBg);
 
   int16_t x = 8;
-  drawLeft("VHF Aurora", x, y, 2, kText);
-  x += tft.textWidth("VHF Aurora", 2);
+  drawLeft("VHF Aurora", x, y, kPropBodyFont, kText);
+  x += tft.textWidth("VHF Aurora", kPropBodyFont);
   if (lat.length() > 0 && lat != "--") {
     const String latText = " (Lat " + lat + ")";
-    drawLeft(latText, x, y, 2, auroraLatColor(lat));
+    drawLeft(latText, x, y, kPropBodyFont, auroraLatColor(lat));
   }
 
   tft.setTextDatum(TR_DATUM);
   tft.setTextColor(vhfConditionColor(status), kBg);
-  tft.drawString(status, tft.width() - 12, y, 2);
+  tft.drawString(status, tft.width() - 12, y, kPropBodyFont);
   last = combined;
 }
 
@@ -1404,20 +1737,32 @@ void drawClockPage(const ClockSnapshot& snapshot) {
 
   if (g_pageDirty) {
     tft.fillScreen(kBg);
-    drawCentered("UTC", 3, 2, kMuted);
+    drawCentered("UTC", kClockLabelY, 2, kMuted);
   }
 
-  drawCenteredField(g_lastUtc, utcBuffer, 20, 7, kAccent);
-  drawCenteredField(g_lastLocal, settings.timezoneLabel + " " + localBuffer, 86, 4);
-  drawCenteredField(g_lastDate, dateBuffer, 120, 4);
+  drawCenteredField(g_lastUtc, utcBuffer, kClockUtcY, kClockUtcFont, kAccent, -1, -1,
+                    kClockUtcSize);
+  drawSplitField(g_lastLocal, settings.timezoneLabel, localBuffer, kClockLocalY, 4, kText, 1,
+                 kClockTextFont);
+  drawCenteredField(g_lastDate, dateBuffer, kClockDateY, 4, kText, -1, -1, 1, kClockTextFont);
   const String stationText = settings.callsign.length() > 0
                                  ? settings.callsign + "   Locator: " + settings.locator
                                  : String("Locator: ") + settings.locator;
-  drawCenteredField(g_lastLocator, stationText, 152, 4);
+  drawCenteredField(g_lastLocator, stationText, kClockStationY, 4, kText, -1, -1, 1,
+                    kClockTextFont);
   const String ipText = snapshot.wifiConnected ? String("IP: ") + WiFi.localIP().toString()
                                                : String("IP: --");
-  drawCenteredField(g_lastIp, ipText, 176, 2, kMuted);
-  drawCenteredField(g_lastUptime, formatUptime(snapshot.uptimeSeconds), 194, 2, kMuted);
+#if DISPLAY_W >= 480
+  // Two short diagnostics share one row on the wide panel. That buys back the
+  // vertical space the double-size local time and date rows need, and putting
+  // them side by side is what the extra width is for.
+  drawCenteredField(g_lastIp, ipText + "    " + formatUptime(snapshot.uptimeSeconds),
+                    kClockIpY, 2, kMuted);
+#else
+  drawCenteredField(g_lastIp, ipText, kClockIpY, 2, kMuted);
+  drawCenteredField(g_lastUptime, formatUptime(snapshot.uptimeSeconds), kClockUptimeY, 2,
+                    kMuted);
+#endif
   drawFooter(snapshot);
 }
 
@@ -1427,26 +1772,31 @@ void drawPropagationPage(const ClockSnapshot& snapshot) {
   if (g_pageDirty) {
     tft.fillScreen(kBg);
     drawCentered("HF Propagation", 4, 4, kAccent);
-    tft.drawRect(4, 30, tft.width() - 8, 58, kPanel);
-    tft.drawRect(4, 88, tft.width() - 8, 104, kPanel);
-    tft.drawFastVLine(112, 88, 104, kPanel);
-    tft.drawFastVLine(216, 88, 104, kPanel);
-    drawLeft("Band", 8, 92, 2, kMuted);
-    drawCenteredAt("Day", 164, 92, 2, kMuted);
-    drawCenteredAt("Night", 266, 92, 2, kMuted);
+    tft.drawRect(4, kPropPanelATop, tft.width() - 8, kPropPanelAH, kPanel);
+    tft.drawRect(4, kPropPanelBTop, tft.width() - 8, kPropPanelBH, kPanel);
+    tft.drawFastVLine(kCondSplit1, kPropPanelBTop, kPropPanelBH, kPanel);
+    tft.drawFastVLine(kCondSplit2, kPropPanelBTop, kPropPanelBH, kPanel);
+    drawLeft("Band", 8, kPropHeadY, 2, kMuted);
+    drawCenteredAt("Day", kCondDayX, kPropHeadY, 2, kMuted);
+    drawCenteredAt("Night", kCondNightX, kPropHeadY, 2, kMuted);
   }
 
   drawTopReadingRows(g_lastPropSfiXray, g_lastPropSunspots, g_lastPropNoise, propagation);
-  tft.drawFastHLine(4, 88, tft.width() - 8, kPanel);
+  tft.drawFastHLine(4, kPropPanelBTop, tft.width() - 8, kPanel);
 
-  drawConditionRow(g_lastPropBandA, "80m-40m", propagation.band8040Day, propagation.band8040Night, 112);
-  drawConditionRow(g_lastPropBandB, "30m-20m", propagation.band3020Day, propagation.band3020Night, 132);
-  drawConditionRow(g_lastPropBandC, "17m-15m", propagation.band1715Day, propagation.band1715Night, 152);
-  drawConditionRow(g_lastPropBandD, "12m-10m", propagation.band1210Day, propagation.band1210Night, 172);
+  drawConditionRow(g_lastPropBandA, "80m-40m", propagation.band8040Day, propagation.band8040Night,
+                   kPropRowY);
+  drawConditionRow(g_lastPropBandB, "30m-20m", propagation.band3020Day, propagation.band3020Night,
+                   kPropRowY + kPropRowPitch);
+  drawConditionRow(g_lastPropBandC, "17m-15m", propagation.band1715Day, propagation.band1715Night,
+                   kPropRowY + 2 * kPropRowPitch);
+  drawConditionRow(g_lastPropBandD, "12m-10m", propagation.band1210Day, propagation.band1210Night,
+                   kPropRowY + 3 * kPropRowPitch);
 
-  drawLeftField(g_lastPropUpdated, "Updated: " + propagation.updatedUtc, 8, 194, 2, kMuted, 150);
-  drawLeftField(g_lastPropStatus, "Status: " + propagation.status, 164, 194, 2,
-                propagation.status == "OK" ? kAccent : kWarn, 152);
+  drawLeftField(g_lastPropUpdated, "Updated: " + propagation.updatedUtc, kPropUpdatedX,
+                kPropStatusY, 2, kMuted, kPropUpdatedW);
+  drawPropStatusField(g_lastPropStatus, "Status: " + propagation.status,
+                      propagation.status == "OK" ? kAccent : kWarn);
   drawFooter(snapshot);
 }
 
@@ -1456,22 +1806,27 @@ void drawVhfPage(const ClockSnapshot& snapshot) {
   if (g_pageDirty) {
     tft.fillScreen(kBg);
     drawCentered("VHF Conditions", 4, 4, kAccent);
-    tft.drawRect(4, 30, tft.width() - 8, 58, kPanel);
-    tft.drawRect(4, 88, tft.width() - 8, 104, kPanel);
+    tft.drawRect(4, kPropPanelATop, tft.width() - 8, kPropPanelAH, kPanel);
+    tft.drawRect(4, kPropPanelBTop, tft.width() - 8, kPropPanelBH, kPanel);
   }
 
   drawTopReadingRows(g_lastPropSfiXray, g_lastPropSunspots, g_lastPropNoise, propagation);
-  tft.drawFastHLine(4, 88, tft.width() - 8, kPanel);
+  tft.drawFastHLine(4, kPropPanelBTop, tft.width() - 8, kPanel);
 
-  drawVhfAuroraRow(g_lastVhfAurora, propagation.vhfAurora, propagation.vhfAuroraLat, 92);
-  drawVhfConditionRow(g_lastVhfEsEurope6m, "Es EU 6m", propagation.vhfEsEurope6m, 112);
-  drawVhfConditionRow(g_lastVhfEsEurope4m, "Es EU 4m", propagation.vhfEsEurope4m, 132);
-  drawVhfConditionRow(g_lastVhfEsEurope, "Es EU 2m", propagation.vhfEsEurope, 152);
-  drawVhfConditionRow(g_lastVhfEsNorthAmerica, "Es NA 2m", propagation.vhfEsNorthAmerica, 172);
+  drawVhfAuroraRow(g_lastVhfAurora, propagation.vhfAurora, propagation.vhfAuroraLat, kVhfRowY);
+  drawVhfConditionRow(g_lastVhfEsEurope6m, "Es EU 6m", propagation.vhfEsEurope6m,
+                      kVhfRowY + kVhfRowPitch);
+  drawVhfConditionRow(g_lastVhfEsEurope4m, "Es EU 4m", propagation.vhfEsEurope4m,
+                      kVhfRowY + 2 * kVhfRowPitch);
+  drawVhfConditionRow(g_lastVhfEsEurope, "Es EU 2m", propagation.vhfEsEurope,
+                      kVhfRowY + 3 * kVhfRowPitch);
+  drawVhfConditionRow(g_lastVhfEsNorthAmerica, "Es NA 2m", propagation.vhfEsNorthAmerica,
+                      kVhfRowY + 4 * kVhfRowPitch);
 
-  drawLeftField(g_lastVhfUpdated, "Updated: " + propagation.updatedUtc, 8, 194, 2, kMuted, 150);
-  drawLeftField(g_lastVhfStatus, "Status: " + propagation.status, 164, 194, 2,
-                propagation.status == "OK" ? kAccent : kWarn, 152);
+  drawLeftField(g_lastVhfUpdated, "Updated: " + propagation.updatedUtc, kPropUpdatedX,
+                kPropStatusY, 2, kMuted, kPropUpdatedW);
+  drawPropStatusField(g_lastVhfStatus, "Status: " + propagation.status,
+                      propagation.status == "OK" ? kAccent : kWarn);
   drawFooter(snapshot);
 }
 
@@ -1489,17 +1844,21 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
     drawGreylineMap(greyline);
     g_lastGreyMap = mapSignature;
   }
-  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, 14, kMapTextRow1, 1, kText, 88);
-  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, 108, kMapTextRow1, 1, kText, 126);
-  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), 14, kMapTextRow2, 1, kText, 76);
-  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), 96, kMapTextRow2, 1, kText, 76);
-  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), 178, kMapTextRow2, 1, kMuted, 82);
-  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, 14, kMapTextRow3, 1,
-                greyline.status == "Location invalid" ? kWarn : kText, 134);
+  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, kGreyQthX, kMapTextRow1, 1, kText,
+                kGreyQthW);
+  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, kGreySunX, kMapTextRow1, 1, kText, kGreySunW);
+  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), kGreyRiseX, kMapTextRow2, 1, kText,
+                kGreyRiseW);
+  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), kGreySetX, kMapTextRow2, 1, kText,
+                kGreySetW);
+  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), kGreyUtcX, kMapTextRow2, 1, kMuted,
+                kGreyUtcW);
+  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, kGreyStatusX, kMapTextRow3, 1,
+                greyline.status == "Location invalid" ? kWarn : kText, kGreyStatusW);
   String greylineLabel = greyline.greyline;
   greylineLabel.replace(" greyline", "");
-  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, 154, kMapTextRow3, 1,
-                greyline.greyline == "Not near greyline" ? kMuted : kAccent);
+  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, kGreyGreylineX, kMapTextRow3, 1,
+                greyline.greyline == "Not near greyline" ? kMuted : kAccent, kGreyGreylineW);
   drawFooter(snapshot);
 }
 
