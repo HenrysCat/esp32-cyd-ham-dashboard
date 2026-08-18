@@ -167,6 +167,20 @@ static_assert(kMapH % kMapBandH == 0,
 constexpr int16_t kMapTextRow1 = kMapY + kMapH + 6;
 constexpr int16_t kMapTextRow2 = kMapTextRow1 + 18;
 constexpr int16_t kMapTextRow3 = kMapTextRow2 + 18;
+// The two PSKReporter rows between the map and the band legend. They are the
+// width of the map they sit under, which works out as the 292px the small board
+// has always used and 452px on the wide one. That is enough room for font 2
+// there: the longest of the four strings these rows can hold, "M9LHX heard by
+// 999 grids / 9999 rpts, last 60m", is 307px.
+//
+// The legend keeps font 1 on both boards. Only 60px separates the map from the
+// footer, and three 16px rows would need every pixel of it; font 1 also keeps
+// the band labels compact, so more of them fit before the row runs out.
+constexpr uint8_t kPskTextFont = (DISPLAY_W >= 480) ? 2 : 1;
+constexpr int16_t kPskTextX = kMapX + 4;
+constexpr int16_t kPskTextW = kMapW - 8;
+static_assert(kMapTextRow2 + (kPskTextFont == 2 ? 16 : 8) <= kMapTextRow3 - 2,
+              "the second PSK row must clear the band legend");
 static_assert(kMapTextRow3 + 10 <= kFooterTop,
               "map page text rows must clear the footer");
 
@@ -235,8 +249,8 @@ constexpr int16_t kGreyRiseX = 14;
 constexpr int16_t kGreyRiseW = 160;
 constexpr int16_t kGreySetX = 180;
 constexpr int16_t kGreySetW = 150;
-constexpr int16_t kGreyUtcX = 340;
-constexpr int16_t kGreyUtcW = 120;
+constexpr int16_t kGreyLocalX = 340;
+constexpr int16_t kGreyLocalW = 120;
 constexpr int16_t kGreyStatusX = 14;
 constexpr int16_t kGreyStatusW = 160;
 constexpr int16_t kGreyGreylineX = 180;
@@ -250,15 +264,29 @@ constexpr int16_t kGreyRiseX = 14;
 constexpr int16_t kGreyRiseW = 76;
 constexpr int16_t kGreySetX = 96;
 constexpr int16_t kGreySetW = 76;
-constexpr int16_t kGreyUtcX = 178;
-constexpr int16_t kGreyUtcW = 82;
+constexpr int16_t kGreyLocalX = 178;
+constexpr int16_t kGreyLocalW = 110;
 constexpr int16_t kGreyStatusX = 14;
 constexpr int16_t kGreyStatusW = 134;
 constexpr int16_t kGreyGreylineX = 154;
 constexpr int16_t kGreyGreylineW = -1;  // runs to the right edge
 #endif
-static_assert(DISPLAY_W < 480 || kGreyStatusW >= 24 * 6,
+// The wide panel draws these seven fields in font 2, which its columns already
+// have the room for: the longest string any of them can hold is "Status:
+// Location invalid" at 152px, inside the 160px Status column. The other six
+// have far more slack - the widest is "Sun: -12.34,-123.45" at 128px in 280.
+constexpr uint8_t kGreyTextFont = (DISPLAY_W >= 480) ? 2 : 1;
+static_assert(DISPLAY_W < 480 || kGreyStatusW >= 152,
               "Status must clear \"Status: Location invalid\" on the wide panel");
+// The middle row's third column shows local time rather than a second copy of
+// the UTC the footer already carries on this page. In 12 hour mode it runs to
+// "Local: 12:24 PM", which is 90px in font 1 and 103px in font 2.
+static_assert(kGreyLocalW >= (kGreyTextFont == 2 ? 103 : 90),
+              "the Local column must clear \"Local: 12:24 PM\"");
+// The bottom row's clear is the glyph height plus four, starting two above the
+// text, and it must stop before the footer rule.
+static_assert(kMapTextRow3 - 2 + (kGreyTextFont == 2 ? 20 : 12) <= kFooterTop,
+              "the greyline bottom row must clear the footer");
 
 // Propagation and VHF page geometry. The two pages share a skeleton: a title, a
 // panel of solar readings, a panel of condition rows, then an updated/status
@@ -451,7 +479,7 @@ String g_lastVhfEsEurope6m;
 String g_lastVhfEsEurope4m;
 String g_lastVhfUpdated;
 String g_lastVhfStatus;
-String g_lastGreyUtc;
+String g_lastGreyLocal;
 String g_lastGreyQth;
 String g_lastGreyLatLon;
 String g_lastGreySunrise;
@@ -570,7 +598,7 @@ void clearPageState() {
   g_lastVhfEsEurope4m = "";
   g_lastVhfUpdated = "";
   g_lastVhfStatus = "";
-  g_lastGreyUtc = "";
+  g_lastGreyLocal = "";
   g_lastGreyQth = "";
   g_lastGreyLatLon = "";
   g_lastGreySunrise = "";
@@ -1720,6 +1748,30 @@ void formatTimes(const ClockSnapshot& snapshot, bool use12Hour) {
   strftime(dateBuffer, sizeof(dateBuffer), "%d %b %Y", &localTime);
 }
 
+// Local time to hours and minutes, for the greyline page to sit beside the
+// sunrise and sunset it is comparing against. The seconds belong on the clock
+// page, and this follows the same 12/24 hour setting that page does.
+String localHourMinute(const ClockSnapshot& snapshot) {
+  if (!snapshot.timeValid) {
+    return "--:--";
+  }
+
+  tm localTime;
+  localtime_r(&snapshot.epoch, &localTime);
+
+  char buffer[12];
+  if (getSettings().clock12Hour) {
+    strftime(buffer, sizeof(buffer), "%I:%M %p", &localTime);
+    // %I pads to two digits, which reads oddly before ten, so drop the zero.
+    if (buffer[0] == '0') {
+      memmove(buffer, buffer + 1, strlen(buffer));
+    }
+  } else {
+    strftime(buffer, sizeof(buffer), "%H:%M", &localTime);
+  }
+  return String(buffer);
+}
+
 String formatUptime(uint32_t seconds) {
   const uint32_t hours = seconds / 3600;
   const uint32_t minutes = (seconds % 3600) / 60;
@@ -1844,21 +1896,24 @@ void drawGreylinePage(const ClockSnapshot& snapshot) {
     drawGreylineMap(greyline);
     g_lastGreyMap = mapSignature;
   }
-  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, kGreyQthX, kMapTextRow1, 1, kText,
-                kGreyQthW);
-  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude, kGreySunX, kMapTextRow1, 1, kText, kGreySunW);
-  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), kGreyRiseX, kMapTextRow2, 1, kText,
-                kGreyRiseW);
-  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), kGreySetX, kMapTextRow2, 1, kText,
-                kGreySetW);
-  drawLeftField(g_lastGreyUtc, "UTC: " + greyline.utcTime.substring(0, 5), kGreyUtcX, kMapTextRow2, 1, kMuted,
-                kGreyUtcW);
-  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, kGreyStatusX, kMapTextRow3, 1,
-                greyline.status == "Location invalid" ? kWarn : kText, kGreyStatusW);
+  drawLeftField(g_lastGreyQth, "QTH: " + greyline.qth, kGreyQthX, kMapTextRow1, kGreyTextFont,
+                kText, kGreyQthW);
+  drawLeftField(g_lastGreySunLat, "Sun: " + greyline.sunLatitude + "," + greyline.sunLongitude,
+                kGreySunX, kMapTextRow1, kGreyTextFont, kText, kGreySunW);
+  drawLeftField(g_lastGreySunrise, "Rise: " + greyline.sunriseUtc.substring(0, 5), kGreyRiseX,
+                kMapTextRow2, kGreyTextFont, kText, kGreyRiseW);
+  drawLeftField(g_lastGreySunset, "Set: " + greyline.sunsetUtc.substring(0, 5), kGreySetX,
+                kMapTextRow2, kGreyTextFont, kText, kGreySetW);
+  drawLeftField(g_lastGreyLocal, "Local: " + localHourMinute(snapshot), kGreyLocalX,
+                kMapTextRow2, kGreyTextFont, kMuted, kGreyLocalW);
+  drawLeftField(g_lastGreyStatus, "Status: " + greyline.status, kGreyStatusX, kMapTextRow3,
+                kGreyTextFont, greyline.status == "Location invalid" ? kWarn : kText,
+                kGreyStatusW);
   String greylineLabel = greyline.greyline;
   greylineLabel.replace(" greyline", "");
-  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, kGreyGreylineX, kMapTextRow3, 1,
-                greyline.greyline == "Not near greyline" ? kMuted : kAccent, kGreyGreylineW);
+  drawLeftField(g_lastGreyline, "Greyline: " + greylineLabel, kGreyGreylineX, kMapTextRow3,
+                kGreyTextFont, greyline.greyline == "Not near greyline" ? kMuted : kAccent,
+                kGreyGreylineW);
   drawFooter(snapshot);
 }
 
@@ -1889,7 +1944,8 @@ void drawPskPage(const ClockSnapshot& snapshot) {
     heading += String(psk.reportCount) + " grids / " + String(psk.totalReports) + " rpts";
     heading += ", last " + String(settings.pskWindowMinutes) + "m";
   }
-  drawLeftField(g_lastPskHeading, heading, 14, kMapTextRow1, 1, kText, 292);
+  drawLeftField(g_lastPskHeading, heading, kPskTextX, kMapTextRow1, kPskTextFont, kText,
+                kPskTextW);
 
   String bestLine;
   if (psk.bestDistanceKm > 0) {
@@ -1899,9 +1955,8 @@ void drawPskPage(const ClockSnapshot& snapshot) {
     bestLine = "Best: --";
   }
   bestLine += "   Upd " + (psk.updated.length() > 0 ? psk.updated.substring(0, 5) : String("--"));
-  drawLeftField(g_lastPskBest, bestLine, 14, kMapTextRow2, 1,
-                psk.bestDistanceKm > 0 ? kAccent : kMuted,
-                292);
+  drawLeftField(g_lastPskBest, bestLine, kPskTextX, kMapTextRow2, kPskTextFont,
+                psk.bestDistanceKm > 0 ? kAccent : kMuted, kPskTextW);
 
   const String legendSignature = String(psk.bandMask) + "|" + psk.status;
   if (legendSignature != g_lastPskFooterLine) {
