@@ -1,10 +1,10 @@
 # CYD Ham Dashboard
 
-A HamClock-inspired ham radio dashboard for the ESP32-2432S028R Cheap Yellow Display.
+A HamClock-inspired ham radio dashboard for the ESP32 Cheap Yellow Display, supporting both the 2.8" ESP32-2432S028R and the 4.0" 320x480 ST7796S variant from a single source tree.
 
 **[Flash it in your browser with the Web Flasher](https://henryscat.github.io/)**
 
-It provides a touch-controlled 320x240 landscape dashboard with UTC/local time, HamQSL propagation data, a greyline map, DX spots, Wi-Fi setup, and a local web settings page.
+It provides a touch-controlled landscape dashboard — 320x240 on the 2.8" board, 480x320 on the 4.0" — with UTC/local time, HamQSL propagation data, a greyline map, DX spots, Wi-Fi setup, and a local web settings page. The 4.0" board uses the extra room rather than simply scaling up: larger text on the data pages, and twelve DX/POTA spots in place of eight.
 
 <a href="https://www.buymeacoffee.com/Henrys_Cat" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
@@ -35,14 +35,21 @@ https://github.com/user-attachments/assets/772c46cd-7d77-45ed-b29a-c5d189fbcf8b
 
 ## Hardware
 
-Tested target:
+Three tested targets, all ESP32-WROOM based with an XPT2046 resistive touch controller:
 
-- ESP32-2432S028R “Cheap Yellow Display”
-- ESP32-WROOM based board
-- ILI9341 320x240 TFT
-- XPT2046 resistive touch controller
+| Board | Panel | PlatformIO env | Setup header |
+| --- | --- | --- | --- |
+| ESP32-2432S028R 2.8" | ILI9341 320x240 | `esp32-2432s028r` | `include/User_Setup.h` |
+| ESP32-2432S028R 2.8" | ST7789 320x240 | `esp32-2432s028r-st7789` | `include/User_Setup_ST7789.h` |
+| CYD 4.0" | ST7796S 480x320 | `esp32-4in-st7796` | `include/User_Setup_ST7796.h` |
 
-The included TFT_eSPI setup uses this common CYD wiring:
+TFT_eSPI binds its panel driver at compile time, so the board is chosen by the
+environment you build, not at runtime. Each environment force-includes its own
+setup header, which carries the pins, the panel size, and the `DISPLAY_W` /
+`DISPLAY_H` values the page layouts are derived from. Everything board-specific
+lives in those headers rather than in the source.
+
+### 2.8" wiring (ESP32-2432S028R)
 
 | Signal | GPIO |
 | --- | ---: |
@@ -59,7 +66,35 @@ The included TFT_eSPI setup uses this common CYD wiring:
 | Touch CS | 33 |
 | Touch IRQ | 36 |
 
-Some CYD variants use different pins. If the display is blank, white, mirrored, or touch is wrong, check your board revision and adjust `include/User_Setup.h` and the touch constants in `src/dashboard_display.cpp`.
+### 4.0" wiring (ST7796S)
+
+The display pins match the 2.8" board. The two differences are the backlight,
+which moves to GPIO 27, and the touch controller, which shares the display's
+SPI bus instead of having its own. `dashboard_display.cpp` detects the shared
+bus by comparing the touch pins against the TFT pins, and uses
+`TFT_eSPI::getSPIinstance()` rather than starting a second bus.
+
+| Signal | GPIO |
+| --- | ---: |
+| TFT MISO | 12 |
+| TFT MOSI | 13 |
+| TFT SCLK | 14 |
+| TFT CS | 15 |
+| TFT DC | 2 |
+| TFT RST | -1 |
+| TFT backlight | **27** |
+| Touch SCLK | **14** (shared) |
+| Touch MOSI | **13** (shared) |
+| Touch MISO | **12** (shared) |
+| Touch CS | 33 |
+| Touch IRQ | 36 |
+
+This board also sets `USE_HSPI_PORT`. GPIO 12/13/14/15 are the ESP32's native
+HSPI pins, so the peripheral can drive them through IOMUX and run the panel at
+80MHz; without it TFT_eSPI defaults to VSPI, routes the signals through the GPIO
+matrix, and the display breaks up into coloured noise above about 27MHz.
+
+Some CYD variants use different pins. If the display is blank, white, mirrored, or touch is wrong, check your board revision and adjust the setup header for your environment and the touch constants in `src/dashboard_display.cpp`.
 
 ### Setup hotspot and factory reset
 
@@ -69,7 +104,7 @@ The board's BOOT button (GPIO0, on the back next to the USB connector) doubles a
 
 ## Flashing A Release Binary
 
-If a `.bin` firmware file is attached to a GitHub release, you can flash it without building from source.
+If a `.bin` firmware file is attached to a GitHub release, you can flash it without building from source. The panel driver is compiled in, so each board has its own binary — check the release notes and pick the one matching your display, as the wrong binary will boot but show nothing usable.
 
 Install `esptool`:
 
@@ -111,16 +146,20 @@ cp include/app_config.example.h include/app_config.h
 
 You may optionally edit `include/app_config.h` before flashing, but Wi-Fi and dashboard settings can also be configured from the captive portal or local web page.
 
-Build:
+Build. With no environment given this builds **all three**, which is a useful
+check that a change suits every board but is not what you want before a flash:
 
 ```sh
 pio run
 ```
 
-Upload:
+Build and upload one board. Always pass `-e`, or the upload runs for each
+environment in turn and leaves the last one on the board:
 
 ```sh
-pio run -t upload
+pio run -e esp32-2432s028r      -t upload   # 2.8" ILI9341
+pio run -e esp32-2432s028r-st7789 -t upload # 2.8" ST7789
+pio run -e esp32-4in-st7796     -t upload   # 4.0" ST7796S
 ```
 
 Open Serial Monitor:
@@ -320,6 +359,11 @@ Displays recent spots with:
 - UTC time
 - Last update time and status
 
+The list holds eight spots on the 2.8" boards and twelve on the 4.0". A new
+Telnet spot pushes the rows down one pitch, animated by rendering the incoming
+row and the rows already on screen into a sprite and pushing a shifted window of
+it each frame.
+
 The default Telnet cluster is `dxspots.com:7300`. The configured station callsign is used for login, or `NOCALL` if no callsign is set. Both sources are configurable from the web settings page.
 
 The device keeps the last good spot list when a refresh or connection fails. The DX page shows whether the active data came from JSON, Telnet, or the last good result.
@@ -343,17 +387,22 @@ Useful defaults:
 Values saved through the captive portal or web settings page override most defaults at runtime.
 When no DX URL has been saved, `DX_SPOTS_URL` is used if configured; otherwise the public IZ3MEZ endpoint is used.
 
-### `include/User_Setup.h`
+### `include/User_Setup*.h`
 
-TFT_eSPI display configuration for the CYD hardware.
-
-PlatformIO includes it automatically via:
+TFT_eSPI display configuration. There is one per board, and PlatformIO
+force-includes the right one from that environment's `build_flags`:
 
 ```ini
 build_flags =
   -D USER_SETUP_LOADED=1
-  -include include/User_Setup.h
+  -include include/User_Setup.h          ; or _ST7789.h / _ST7796.h
 ```
+
+Because the header is force-included into every translation unit, the
+`DISPLAY_W` and `DISPLAY_H` it defines are visible project-wide. The page
+layouts derive their geometry from those two values, and `src/dx_spots.h` and
+`src/pota_spots.h` use `DISPLAY_H` to size the spot arrays — eight rows on the
+2.8" boards, twelve on the 4.0".
 
 ## Timezones
 
@@ -415,9 +464,12 @@ Propagation, DX, and PSKReporter refresh intervals can be changed in the web set
 
 ```text
 include/
-  User_Setup.h          TFT_eSPI CYD pin setup
-  app_config.example.h  Example local config
-  greyline_map.h        Embedded Greyline map bitmap
+  User_Setup.h              TFT_eSPI pin setup, 2.8" ILI9341
+  User_Setup_ST7789.h       TFT_eSPI pin setup, 2.8" ST7789
+  User_Setup_ST7796.h       TFT_eSPI pin setup, 4.0" ST7796S
+  app_config.example.h      Example local config
+  greyline_map.h            Embedded Greyline map bitmap, 300x150
+  greyline_map_460x230.h    Embedded Greyline map bitmap, 4.0" board
 
 src/
   main.cpp              App entry point
@@ -439,13 +491,28 @@ src/
 - Telnet reading is non-blocking; connection attempts use a short bounded timeout.
 - SD card storage is not required.
 - LVGL is not used.
-- The embedded Greyline map uses flash space; current firmware size is close to the default app partition limit.
+- The embedded Greyline map uses flash space; current firmware size is close to the default app partition limit. All three environments use `min_spiffs.csv` to get a large enough app partition. The 4.0" build is the biggest, as it carries a 460x230 map instead of 300x150.
+- The Greyline and PSKReporter maps are composed and pushed one horizontal band at a time rather than as a single sprite, so the map visibly draws in stages. That is deliberate: the 4.0" map would need a 211,600-byte contiguous allocation against a largest free block of about 110,000, so it could not be drawn any other way. Band height is set per board by `MAP_BAND_ROWS` and must divide the map height exactly.
 
 ## Troubleshooting
 
 ### Display is blank or white
 
-Check that your CYD uses the same display pins as `include/User_Setup.h`.
+Check that your CYD uses the same display pins as the setup header for the
+environment you built, and that you flashed the environment matching your panel.
+
+### Display shows random coloured pixels
+
+The panel is receiving SPI it cannot follow. Before reaching for a lower
+`SPI_FREQUENCY`, check which SPI port the build is using. On a board wired to
+GPIO 12/13/14/15 — the ESP32's native HSPI pins — TFT_eSPI's default VSPI has to
+route those signals through the GPIO matrix, and the added delay makes anything
+near 40MHz unreliable. Setting `USE_HSPI_PORT` in the setup header moves them
+onto IOMUX and the same panel runs at 80MHz.
+
+This is worth checking first because lowering the clock hides the fault at a
+real cost: it is roughly a third of the draw rate, which shows up as a visibly
+slow spot-list scroll and a slow map redraw.
 
 ### Touch is inaccurate
 
