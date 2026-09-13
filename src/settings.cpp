@@ -115,6 +115,7 @@ void normalizeSettings(AppSettings& settings) {
   settings.dxSpotsUrl = limitedString(settings.dxSpotsUrl, 180);
   settings.dxTelnetHost = limitedString(settings.dxTelnetHost, 64);
   settings.pskAppContact = limitedString(settings.pskAppContact, 64);
+  settings.n2yoApiKey = limitedString(settings.n2yoApiKey, 64);
 
   if (settings.timezone.length() == 0) {
     settings.timezone = kDefaultTimezone;
@@ -211,6 +212,8 @@ void settingsBegin() {
       preferences.getUShort("potamins", kDefaultPotaRefreshMinutes);
   currentSettings.potaMaxDistanceKm = preferences.getUShort("potadist", 0);
   currentSettings.potaExcludeRbn = preferences.getBool("potarbn", false);
+  currentSettings.issEnabled = preferences.getBool("issenabled", false);
+  currentSettings.n2yoApiKey = preferences.getString("n2yokey", "");
   currentSettings.autoPageChange = preferences.getBool("autopage", false);
   currentSettings.autoPageSeconds =
       preferences.getUShort("autosecs", kDefaultAutoPageSeconds);
@@ -263,6 +266,8 @@ void saveSettings(const AppSettings& settings) {
   preferences.putUShort("potamins", currentSettings.potaRefreshMinutes);
   preferences.putUShort("potadist", currentSettings.potaMaxDistanceKm);
   preferences.putBool("potarbn", currentSettings.potaExcludeRbn);
+  preferences.putBool("issenabled", currentSettings.issEnabled);
+  preferences.putString("n2yokey", currentSettings.n2yoApiKey);
   preferences.putBool("autopage", currentSettings.autoPageChange);
   preferences.putUShort("autosecs", currentSettings.autoPageSeconds);
   preferences.putUChar("autopages", currentSettings.autoPageMask);

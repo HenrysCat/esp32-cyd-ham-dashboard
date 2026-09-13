@@ -13,6 +13,7 @@
 
 #include "dx_spots.h"
 #include "greyline.h"
+#include "iss_tracker.h"
 // The 4.0" board carries a larger map. Both headers define the same width,
 // height and pixel-array identifiers, so nothing below has to know which one a
 // build selected.
@@ -49,6 +50,9 @@ enum DashboardPage : uint8_t {
   kPageVhf,
   kPageGreyline,
   kPagePsk,
+  // Grouped with the other two map pages rather than appended at the end;
+  // it stays out of reach (see issTrackerActive) until it is configured.
+  kPageIss,
   kPageDx,
   kPagePota,
   kPageCount
@@ -58,6 +62,12 @@ static_assert(kPageCount == kDashboardPageCount,
               "kDashboardPageCount must match the number of dashboard pages");
 static_assert(kAutoPageMaskAll == (1u << kPageCount) - 1u,
               "kAutoPageMaskAll must have one bit per dashboard page");
+
+// Every page is reachable except the ISS tracker, which stays hidden from
+// both manual and automatic navigation until it has been configured.
+bool pageIsActive(uint8_t page) {
+  return page != kPageIss || issTrackerActive();
+}
 
 constexpr uint8_t kLandscapeRotation = 0;
 constexpr uint32_t kTouchDebounceMs = 300;
@@ -179,6 +189,18 @@ constexpr int16_t kMapTextRow3 = kMapTextRow2 + 18;
 constexpr uint8_t kPskTextFont = (DISPLAY_W >= 480) ? 2 : 1;
 constexpr int16_t kPskTextX = kMapX + 4;
 constexpr int16_t kPskTextW = kMapW - 8;
+// Neither built-in font has a usable degree glyph: writing the UTF-8 degree
+// sign renders as a shaded block on Font 1, and both fonts' actual degree
+// character (Font 1's CP437 ring at 0xF8, Font 2's grave-accent substitute)
+// sits mid-cell rather than raised like a real superscript degree mark. A
+// small circle drawn by hand, flush with the top of the row, looks right on
+// both. kDegreeMark is a sentinel byte no field text otherwise contains;
+// drawTextRun (below) swaps it for that circle when drawing.
+constexpr char kDegreeMark = '\x01';
+// The 4.0" board's top ISS row has room for the current azimuth/elevation
+// alongside Lat/Lon/Alt; the 2.8" board's does not, so it keeps them on the
+// Next row instead, as before.
+constexpr bool kIssAzElOnHeading = DISPLAY_H >= 320;
 static_assert(kMapTextRow2 + (kPskTextFont == 2 ? 16 : 8) <= kMapTextRow3 - 2,
               "the second PSK row must clear the band legend");
 static_assert(kMapTextRow3 + 10 <= kFooterTop,
@@ -525,6 +547,13 @@ String g_lastPskMap;
 String g_lastPskHeading;
 String g_lastPskBest;
 String g_lastPskFooterLine;
+String g_lastIssMap;
+String g_lastIssHeadingMain;
+String g_lastIssHeadingSuffix;
+String g_lastIssNextMain;
+String g_lastIssNextSuffix;
+String g_lastIssFollowingMain;
+String g_lastIssFollowingSuffix;
 String g_lastDxEmpty;
 String g_lastDxUpdated;
 String g_lastDxSource;
@@ -581,8 +610,20 @@ String ntpStatusText(bool valid) {
 }
 
 String pageIndicator() {
-  return String("Page ") + String(static_cast<uint8_t>(g_currentPage) + 1) +
-         "/" + String(kPageCount);
+  // Numbers the pages that are actually reachable right now, so a hidden ISS
+  // page does not leave a gap (or an inflated total) in what is shown.
+  uint8_t activeTotal = 0;
+  uint8_t activePosition = 0;
+  for (uint8_t page = 0; page < kPageCount; ++page) {
+    if (!pageIsActive(page)) {
+      continue;
+    }
+    ++activeTotal;
+    if (page <= static_cast<uint8_t>(g_currentPage)) {
+      activePosition = activeTotal;
+    }
+  }
+  return String("Page ") + String(activePosition) + "/" + String(activeTotal);
 }
 
 String footerUtcText(const ClockSnapshot& snapshot) {
@@ -644,6 +685,13 @@ void clearPageState() {
   g_lastPskHeading = "";
   g_lastPskBest = "";
   g_lastPskFooterLine = "";
+  g_lastIssMap = "";
+  g_lastIssHeadingMain = "";
+  g_lastIssHeadingSuffix = "";
+  g_lastIssNextMain = "";
+  g_lastIssNextSuffix = "";
+  g_lastIssFollowingMain = "";
+  g_lastIssFollowingSuffix = "";
   for (uint8_t i = 0; i < kMaxDxSpots; ++i) {
     g_dxShownRows[i] = DxRowText();
   }
@@ -810,6 +858,94 @@ void drawLeftField(String& last, const String& value, int16_t x, int16_t y,
   tft.setTextColor(color, kBg);
   tft.drawString(value, x, y, font);
   last = value;
+}
+
+// Draws one run of text starting at x, swapping each kDegreeMark byte for a
+// small hand-drawn circle flush with the top of the row rather than a font
+// glyph - see the comment on kDegreeMark for why. Returns the x position
+// just past what was drawn, so a second run can continue in another colour.
+int16_t drawTextRun(const String& text, int16_t x, int16_t y, uint8_t font, uint16_t color) {
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(color, kBg);
+
+  const int16_t radius = tft.fontHeight(font) >= 16 ? 2 : 1;
+  int16_t cursorX = x;
+  int16_t start = 0;
+  for (;;) {
+    const int markIndex = text.indexOf(kDegreeMark, start);
+    const String chunk =
+        markIndex < 0 ? text.substring(start) : text.substring(start, markIndex);
+    if (chunk.length() > 0) {
+      tft.drawString(chunk, cursorX, y, font);
+      cursorX += tft.textWidth(chunk, font);
+    }
+    if (markIndex < 0) {
+      break;
+    }
+    tft.drawCircle(cursorX + radius + 1, y + radius, radius, color);
+    cursorX += radius * 2 + 3;
+    start = markIndex + 1;
+  }
+  return cursorX;
+}
+
+// As tft.textWidth(), but accounts for kDegreeMark being drawn as a circle
+// rather than measured as an ordinary glyph - see drawTextRun.
+int16_t measureTextRunWidth(const String& text, uint8_t font) {
+  const int16_t radius = tft.fontHeight(font) >= 16 ? 2 : 1;
+  int16_t width = 0;
+  int16_t start = 0;
+  for (;;) {
+    const int markIndex = text.indexOf(kDegreeMark, start);
+    const String chunk =
+        markIndex < 0 ? text.substring(start) : text.substring(start, markIndex);
+    if (chunk.length() > 0) {
+      width += tft.textWidth(chunk, font);
+    }
+    if (markIndex < 0) {
+      break;
+    }
+    width += radius * 2 + 3;
+    start = markIndex + 1;
+  }
+  return width;
+}
+
+// As drawLeftField, but a second run in its own colour follows the first on
+// the same row (pass suffixText = "" for a single-colour field that still
+// wants kDegreeMark handled) - used where a field ends with an extra reading
+// that wants to read as distinct from the rest of the line. mainText and
+// suffixText redraw independently, each only when it actually changes:
+// suffixText here updates far more often than mainText, and clearing the
+// whole row on every suffix change flickered text that had not moved.
+void drawTwoToneField(String& lastMain, String& lastSuffix, const String& mainText,
+                      uint16_t mainColor, const String& suffixText, uint16_t suffixColor,
+                      int16_t x, int16_t y, uint8_t font, int16_t w = -1) {
+  if (w < 0) {
+    w = tft.width() - x;
+  }
+  const int16_t h = tft.fontHeight(font) + 4;
+  const int16_t afterMain = x + measureTextRunWidth(mainText, font);
+
+  const bool mainChanged = mainText != lastMain;
+  if (mainChanged) {
+    const int16_t oldWidth = measureTextRunWidth(lastMain, font);
+    const int16_t clearWidth =
+        min<int16_t>(w, max<int16_t>(afterMain - x, oldWidth) + 2);
+    tft.fillRect(x, y - 2, clearWidth, h, kBg);
+    drawTextRun(mainText, x, y, font, mainColor);
+    lastMain = mainText;
+  }
+
+  // A main text change can shift where the suffix belongs even when the
+  // suffix's own text has not changed, so that also forces a redraw here.
+  if (mainChanged || suffixText != lastSuffix) {
+    tft.fillRect(afterMain, y - 2, max<int16_t>(0, x + w - afterMain), h, kBg);
+    if (suffixText.length() > 0) {
+      drawTextRun(suffixText, afterMain, y, font, suffixColor);
+    }
+    lastSuffix = suffixText;
+  }
 }
 
 // As drawLeftField, but the text ends at right rather than starting at x. The
@@ -1308,6 +1444,77 @@ void drawPskMap(const PskReporterData& psk) {
 
     if (haveQth) {
       drawQthMarker(qthLat, qthLon);
+    }
+    pushMapBand();
+  }
+  g_mapBandTop = 0;
+  releaseMapSprite();
+}
+
+// A small satellite silhouette - two solar-panel wings joined by a truss -
+// rather than a plain dot, so it reads as a tracked spacecraft rather than a
+// report. Yellow rather than a cooler colour: the map's ocean fill is blue
+// enough that cyan nearly disappeared into it.
+void drawIssMarker(double latitude, double longitude) {
+  int16_t x;
+  int16_t y;
+  latLonToMapXY(latitude, longitude, x, y);
+  const int16_t sy = bandY(y);
+  mapSprite.fillRect(x - 5, sy - 3, 11, 7, TFT_BLACK);
+  mapSprite.drawFastHLine(x - 4, sy, 9, TFT_YELLOW);
+  mapSprite.drawFastVLine(x - 4, sy - 2, 5, TFT_YELLOW);
+  mapSprite.drawFastVLine(x + 4, sy - 2, 5, TFT_YELLOW);
+  mapSprite.fillRect(x - 1, sy - 1, 3, 3, TFT_YELLOW);
+}
+
+// The +-45 minute track window is close to one full ISS orbit, so it often
+// wraps the antimeridian; a large longitude jump between consecutive points
+// means a wrap rather than a real path, so that one segment is skipped
+// rather than drawn as a bogus line straight across the map.
+void drawIssTrack(const IssTrackerData& iss) {
+  if (iss.trackCount < 2) {
+    return;
+  }
+  // A dimmer amber rather than the marker's full-brightness yellow, so the
+  // current position still reads as the one bright thing on the track.
+  const uint16_t trackColor = mapSprite.color565(120, 95, 0);
+  for (uint8_t i = 1; i < iss.trackCount; ++i) {
+    const IssTrackPoint& a = iss.track[i - 1];
+    const IssTrackPoint& b = iss.track[i];
+    if (fabs(b.longitude - a.longitude) > 180.0) {
+      continue;
+    }
+    int16_t x1, y1, x2, y2;
+    latLonToMapXY(a.latitude, a.longitude, x1, y1);
+    latLonToMapXY(b.latitude, b.longitude, x2, y2);
+    mapSprite.drawLine(x1, bandY(y1), x2, bandY(y2), trackColor);
+  }
+}
+
+void drawIssMap(const IssTrackerData& iss) {
+  if (!ensureMapSprite()) {
+    drawMapPlaceholder();
+    return;
+  }
+
+  const GreylineData& greyline = getGreylineData();
+
+  double qthLat;
+  double qthLon;
+  const bool haveQth = getConfiguredLatitude(qthLat) && getConfiguredLongitude(qthLon);
+
+  for (g_mapBandTop = 0; g_mapBandTop < kMapH; g_mapBandTop += kMapBandH) {
+    drawMapBandBackground();
+    if (greyline.valid) {
+      drawNightShading(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+      drawTerminator(greyline.sunLatitudeValue, greyline.sunLongitudeValue);
+    }
+    drawIssTrack(iss);
+    if (haveQth) {
+      drawQthMarker(qthLat, qthLon);
+    }
+    if (iss.hasPosition) {
+      drawIssMarker(iss.latitude, iss.longitude);
     }
     pushMapBand();
   }
@@ -1996,6 +2203,95 @@ void drawPskPage(const ClockSnapshot& snapshot) {
   drawFooter(snapshot);
 }
 
+String issTimeHm(time_t epoch) {
+  if (epoch <= 0) {
+    return "--:--";
+  }
+  tm utc;
+  gmtime_r(&epoch, &utc);
+  char buffer[8];
+  strftime(buffer, sizeof(buffer), "%H:%M", &utc);
+  return String(buffer);
+}
+
+void drawIssPage(const ClockSnapshot& snapshot) {
+  const IssTrackerData& iss = getIssTrackerData();
+
+  if (g_pageDirty) {
+    tft.fillScreen(kBg);
+  }
+
+  const GreylineData& greyline = getGreylineData();
+  const String mapSignature = String(iss.hasPosition ? "1" : "0") + "|" +
+                              String(iss.positionUpdatedUtc) + "|" + String(iss.trackCount) +
+                              "|" + greyline.sunLatitude + "|" + greyline.sunLongitude;
+  if (mapSignature != g_lastIssMap) {
+    drawIssMap(iss);
+    g_lastIssMap = mapSignature;
+  }
+
+  // Current azimuth/elevation sit on the heading row on boards with room for
+  // them (4.0"), or on the Next row otherwise (2.8") - see kIssAzElOnHeading.
+  // Either way they redraw independently of whatever text they sit after
+  // (see drawTwoToneField), since they update every 20 seconds rather than
+  // with the rest of that row's content.
+  const String azElReading =
+      iss.hasPosition ? ("Az " + String(static_cast<int>(iss.azimuthDeg)) + kDegreeMark +
+                         " El " + String(static_cast<int>(iss.elevationDeg)) + kDegreeMark)
+                       : "";
+
+  String heading;
+  if (iss.hasPosition) {
+    const int altMiles = static_cast<int>(iss.altitudeKm * 0.621371);
+    heading = "Lat " + String(iss.latitude, 2) + "  Lon " + String(iss.longitude, 2) + "  Alt " +
+              String(static_cast<int>(iss.altitudeKm)) + "km/" + String(altMiles) + "mi";
+  } else {
+    heading = "Status: " + iss.status;
+  }
+  drawTwoToneField(g_lastIssHeadingMain, g_lastIssHeadingSuffix, heading, kText,
+                   kIssAzElOnHeading ? ("  " + azElReading) : "", kText, kPskTextX, kMapTextRow1,
+                   kPskTextFont, kPskTextW);
+
+  String nextLine;
+  if (iss.passCount > 0) {
+    const IssPass& next = iss.passes[0];
+    const int16_t durationMin = static_cast<int16_t>((next.losUtc - next.aosUtc) / 60);
+    nextLine = "Next: " + issTimeHm(next.aosUtc) + " UTC  el " +
+               String(static_cast<int>(next.maxElevationDeg)) + kDegreeMark + "  " +
+               String(durationMin) + "m";
+  } else {
+    nextLine = "Next pass: --";
+  }
+  drawTwoToneField(g_lastIssNextMain, g_lastIssNextSuffix, nextLine,
+                   iss.passCount > 0 ? kAccent : kMuted,
+                   kIssAzElOnHeading ? "" : ("  " + azElReading), kText, kPskTextX, kMapTextRow2,
+                   kPskTextFont, kPskTextW);
+
+  // Lists every pass the fetch kept beyond the first, not just a fixed two,
+  // stopping once the row would actually overflow - which on the wider 4.0"
+  // board (kMaxIssPasses 5 there, against 3 on the 2.8") is usually all of
+  // them.
+  String followingLine;
+  if (iss.passCount > 1) {
+    followingLine = "Then:";
+    for (uint8_t i = 1; i < iss.passCount; ++i) {
+      const String entry = "  " + issTimeHm(iss.passes[i].aosUtc) + " (" +
+                           String(static_cast<int>(iss.passes[i].maxElevationDeg)) + kDegreeMark +
+                           ")";
+      if (measureTextRunWidth(followingLine + entry, kPskTextFont) > kPskTextW) {
+        break;
+      }
+      followingLine += entry;
+    }
+  } else {
+    followingLine = "Then: --";
+  }
+  drawTwoToneField(g_lastIssFollowingMain, g_lastIssFollowingSuffix, followingLine, kMuted, "",
+                   kText, kPskTextX, kMapTextRow3, kPskTextFont, kPskTextW);
+
+  drawFooter(snapshot);
+}
+
 void drawDxPage(const ClockSnapshot& snapshot) {
   const DxSpotsData& dx = getDxSpotsData();
 
@@ -2052,6 +2348,14 @@ void drawPotaPage(const ClockSnapshot& snapshot) {
 }
 
 void drawCurrentPage(const ClockSnapshot& snapshot) {
+  // Settings may have turned the ISS page off (or the API key emptied) while
+  // it was on screen; bounce off it the same way an unmatched page would.
+  if (g_currentPage == kPageIss && !issTrackerActive()) {
+    g_currentPage = kPageClock;
+    clearPageState();
+    g_pageDirty = true;
+  }
+
   if (g_currentPage != kPageDx && g_currentPage != kPagePota) {
     // A part-finished animation must not resume when the page comes back, but
     // the sprite itself is kept - see reserveDisplaySprites.
@@ -2075,6 +2379,9 @@ void drawCurrentPage(const ClockSnapshot& snapshot) {
     case kPagePsk:
       drawPskPage(snapshot);
       break;
+    case kPageIss:
+      drawIssPage(snapshot);
+      break;
     case kPageDx:
       drawDxPage(snapshot);
       break;
@@ -2091,14 +2398,21 @@ void drawCurrentPage(const ClockSnapshot& snapshot) {
 }
 
 void nextPage() {
-  g_currentPage = static_cast<DashboardPage>((static_cast<uint8_t>(g_currentPage) + 1) % kPageCount);
+  uint8_t page = static_cast<uint8_t>(g_currentPage);
+  do {
+    page = (page + 1) % kPageCount;
+  } while (!pageIsActive(page));
+  g_currentPage = static_cast<DashboardPage>(page);
   clearPageState();
   g_pageDirty = true;
 }
 
 void previousPage() {
-  const uint8_t page = static_cast<uint8_t>(g_currentPage);
-  g_currentPage = static_cast<DashboardPage>(page == 0 ? kPageCount - 1 : page - 1);
+  uint8_t page = static_cast<uint8_t>(g_currentPage);
+  do {
+    page = (page == 0 ? kPageCount - 1 : page - 1);
+  } while (!pageIsActive(page));
+  g_currentPage = static_cast<DashboardPage>(page);
   clearPageState();
   g_pageDirty = true;
 }
@@ -2112,7 +2426,7 @@ void advanceToNextIncludedPage(uint8_t mask) {
   for (uint8_t step = 1; step < kPageCount; ++step) {
     const uint8_t candidate =
         static_cast<uint8_t>((static_cast<uint8_t>(g_currentPage) + step) % kPageCount);
-    if (mask & (1u << candidate)) {
+    if ((mask & (1u << candidate)) && pageIsActive(candidate)) {
       g_currentPage = static_cast<DashboardPage>(candidate);
       clearPageState();
       g_pageDirty = true;
@@ -2314,6 +2628,9 @@ void handleTouch() {
       // The request is queued rather than run now: the PSKReporter module holds
       // its own five minute floor and will pick this up when that has elapsed.
       requestPskReporterRefresh();
+    } else if (g_currentPage == kPageIss &&
+               x >= tft.width() / 3 && x <= (tft.width() * 2) / 3) {
+      requestIssTrackerRefresh();
     } else {
       const bool tappedLeft = x < tft.width() / 2;
       if (tappedLeft != getSettings().swapTouchNav) {
@@ -2337,6 +2654,7 @@ void displayBegin() {
   propagationBegin();
   pskReporterBegin();
   potaSpotsBegin();
+  issTrackerBegin();
 
   pinMode(kTouchCs, OUTPUT);
   digitalWrite(kTouchCs, HIGH);
@@ -2358,6 +2676,8 @@ void displayUpdate(const ClockSnapshot& snapshot) {
                            refreshPropagationIfNeeded(snapshot.wifiConnected) |
                            refreshPskReporterIfNeeded(snapshot.wifiConnected) |
                            refreshPotaSpotsIfNeeded(snapshot.wifiConnected) |
+                           refreshIssTrackerIfNeeded(snapshot.wifiConnected, snapshot.epoch,
+                                                     snapshot.timeValid) |
                            updateGreylineData(snapshot.epoch, snapshot.timeValid);
   const uint32_t nowMs = millis();
   serviceNightDimming(snapshot.epoch);
@@ -2433,6 +2753,7 @@ const char* dashboardPageName(uint8_t pageIndex) {
     case kPageVhf: return "VHF Conditions";
     case kPageGreyline: return "Greyline";
     case kPagePsk: return "PSKReporter";
+    case kPageIss: return "ISS Tracker";
     case kPageDx: return "DX Spots";
     case kPagePota: return "POTA Spots";
     default: return "";

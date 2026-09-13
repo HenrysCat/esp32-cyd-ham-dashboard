@@ -13,7 +13,7 @@ enum DxSourceMode : uint8_t {
 // Every dashboard page taking part in the automatic page change. One bit per
 // page, bit 0 being page 1; the static_assert in dashboard_display.cpp keeps
 // this in step with the number of pages the dashboard actually has.
-constexpr uint8_t kAutoPageMaskAll = 0x7F;
+constexpr uint8_t kAutoPageMaskAll = 0xFF;
 
 struct AppSettings {
   String wifiSsid;
@@ -36,6 +36,9 @@ struct AppSettings {
   // 0 means no distance limit on POTA spots.
   uint16_t potaMaxDistanceKm;
   bool potaExcludeRbn;
+  // ISS tracker page is only shown once this is on and n2yoApiKey is set.
+  bool issEnabled;
+  String n2yoApiKey;
   uint16_t propagationRefreshMinutes;
   uint16_t dxRefreshMinutes;
   uint16_t pskRefreshMinutes;

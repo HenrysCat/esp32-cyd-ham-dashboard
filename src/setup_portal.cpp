@@ -322,6 +322,14 @@ String pageHtml(const String& message = "") {
   html += F("<label><input name='potarbn' type='checkbox' value='1'");
   html += checked(settings.potaExcludeRbn);
   html += F(">Hide RBN spots</label><small>RBN spots are posted automatically by skimmers rather than by a person. Hiding them leaves only human-posted spots.</small>");
+  html += F("</div><div class='card'><h2>ISS Tracker</h2>");
+  html += F("<small>Current position and next three passes over your locator, from the free N2YO API. The page stays hidden from both manual and automatic navigation until this is switched on and a key is set.</small>");
+  html += F("<label><input name='issenabled' type='checkbox' value='1'");
+  html += checked(settings.issEnabled);
+  html += F(">Show ISS tracker page</label>");
+  html += F("<label for='n2yokey'>N2YO API key</label><input id='n2yokey' name='n2yokey' maxlength='64' value='");
+  html += htmlEscape(settings.n2yoApiKey);
+  html += F("'><small>Free at <code>n2yo.com/api</code>.</small>");
   html += F("</div><div class='card'><h2>Automatic Page Change</h2>");
   html += F("<label><input name='autopage' type='checkbox' value='1'");
   html += checked(settings.autoPageChange);
@@ -471,6 +479,8 @@ void handleSave() {
   settings.potaRefreshMinutes = static_cast<uint16_t>(
       constrain(server.arg("potamins").toInt(), 1L, 120L));
   settings.potaExcludeRbn = server.hasArg("potarbn");
+  settings.issEnabled = server.hasArg("issenabled");
+  settings.n2yoApiKey = limitedArg("n2yokey", 64);
   settings.autoPageChange = server.hasArg("autopage");
   settings.autoPageSeconds = static_cast<uint16_t>(
       constrain(server.arg("autosecs").toInt(), 3L, 600L));

@@ -14,12 +14,13 @@ https://github.com/user-attachments/assets/772c46cd-7d77-45ed-b29a-c5d189fbcf8b
 
 - ESP32-2432S028R / CYD ILI9341 display support
 - XPT2046 touch navigation
-- Seven dashboard pages:
+- Seven dashboard pages, plus an optional eighth:
   - Clock
   - HF Propagation from HamQSL
   - VHF Conditions from HamQSL
   - Greyline map with QTH marker, sun marker, terminator, sunrise/sunset, and day/night status
   - PSKReporter reception reports for your callsign, plotted on the same world map
+  - ISS Tracker: current position and ground track on the same world map, plus upcoming passes (optional; hidden until a free N2YO API key is set)
   - DX spots from JSON and/or a persistent Telnet DX Cluster connection
   - POTA activator spots, with an optional distance filter from your locator
 - Captive portal Wi-Fi setup, which automatically switches off a few seconds after the device confirms it has joined your Wi-Fi network (it can be switched back on from the web settings page if you need it again)
@@ -230,11 +231,12 @@ This web UI is intended for a trusted local network. It does not include authent
 - Tap centre on HF Propagation or VHF Conditions page: manual propagation refresh
 - Tap centre on DX Spots page: manual DX refresh
 - Tap centre on PSKReporter page: queue a manual PSKReporter refresh (it runs once the five minute minimum interval has elapsed)
+- Tap centre on ISS Tracker page: manual position and pass refresh
 - Tap centre on POTA Spots page: manual POTA refresh
 
 The footer shows Wi-Fi status, NTP status, and current page number. On every page except the Clock it also shows the current UTC time (the Clock page omits this since it already shows a full UTC readout above).
 
-The Automatic Page Change section of the web settings page can cycle the dashboard on its own. Set how many seconds each page is shown (3 to 600) and tick which pages take part; unticked pages are skipped by the cycle but are still reachable by tapping. Any tap restarts the countdown, so a page being read is not pulled away mid-look.
+The Automatic Page Change section of the web settings page can cycle the dashboard on its own. Set how many seconds each page is shown (3 to 600) and tick which pages take part; unticked pages are skipped by the cycle but are still reachable by tapping. The ISS Tracker page is the one exception: while it is switched off, or has no API key set, it is left out of both the cycle and the left/right tap navigation entirely, rather than just being unticked. Any tap restarts the countdown, so a page being read is not pulled away mid-look.
 
 If a DX or POTA row is part way through scrolling in when the countdown expires, the change waits for the list to settle rather than cutting the slide off, then turns the page immediately. A three second grace cap keeps a busy Telnet feed from parking the rotation on one page.
 
@@ -334,6 +336,28 @@ The page needs a callsign to work. With the callsign field blank it shows the ma
 PSKReporter asks that reception data is retrieved no more often than once every five minutes. The firmware enforces that as a hard floor: the refresh setting will not go below five minutes, and a manual refresh from the touch screen or from saving settings is queued rather than run immediately if the last request was more recent than that. A `503` response, which is how PSKReporter turns away a client querying too often, is shown as `Rate limited` on the status line.
 
 Reports are read straight off the socket one XML element at a time and never buffered whole, so an active callsign returning hundreds of reports costs no more RAM than a quiet one. Up to 48 grid squares are plotted; the furthest-report line considers every report returned, not just the plotted ones.
+
+### ISS Tracker
+
+Plots the current position of the ISS on the same world map the Greyline and PSKReporter pages use, draws its ground track either side of now, and lists upcoming passes over your configured locator. Position and track are computed on-device with [SGP4](https://github.com/Hopperpop/Sgp4-Library) orbital propagation from a TLE fetched periodically from [Celestrak](https://celestrak.org/), so they update often (every 20 seconds) and cost no network requests beyond the daily TLE refresh. Passes still come from the free [N2YO](https://www.n2yo.com/api/) REST API's `radiopasses` endpoint, since correctly searching a topocentric elevation curve for AOS/max-elevation/LOS is exactly the kind of thing better left to a service that already does it, and N2YO's free-tier limit for that endpoint (100 requests/hour) comfortably covers an hourly refresh. `radiopasses` rather than `visualpasses` deliberately: hams care about any pass above the elevation threshold for an RF contact (APRS, voice repeater, SSTV), not just the rarer passes where the ISS is sunlit against a dark sky.
+
+Displays:
+
+- ISS marker on the world map, alongside the QTH marker
+- Ground track for roughly the 45 minutes either side of now (about half the ISS's ~93 minute orbit), as a thin line; a segment is skipped rather than drawn wherever the track crosses the antimeridian
+- Current latitude/longitude and altitude, in both km and miles
+- Current azimuth and elevation - i.e. where to actually point - alongside the next pass line
+- Next pass: rise time (UTC), maximum elevation, duration
+- Every pass after that which still fits the row: four on the 2.8" boards, up to five on the 4.0" (matching the DX/POTA pages' precedent of the taller board showing more rows rather than just bigger text)
+
+Settings:
+
+- `Show ISS tracker page`: off by default
+- `N2YO API key`: free, from [n2yo.com/api](https://www.n2yo.com/api/) — used only for the pass list; position and track work without it once the TLE has been fetched, but the page stays hidden until a key is set regardless
+
+This is the one dashboard page that is not always present. With the checkbox off, or the key blank, it is left out of both the automatic page cycle and manual left/right navigation entirely — the dashboard behaves exactly as it did before this page existed. Turning it on and setting a key adds it immediately, no reboot required.
+
+Passes are only searched up to two days out and down to a 10 degree minimum elevation, which is the same trade every ham pass predictor makes between screen space and usefulness.
 
 ### DX Spots
 
@@ -455,6 +479,7 @@ Default refresh intervals:
 - DX Telnet: persistent connection with reconnect attempts limited to once every 30 seconds
 - PSKReporter: 5 minutes, which is also the lowest interval the service permits
 - POTA: 5 minutes, with a one minute hard floor
+- ISS Tracker: position/track every 20 seconds (local SGP4 computation, no network cost), TLE once a day, passes every hour (all fixed, not user-configurable)
 - Greyline calculations: once per minute
 - Clock: once per second
 
@@ -482,6 +507,7 @@ src/
   psk_reporter.*        PSKReporter query, streaming XML parse, rate limiting
   pota_spots.*          POTA spot fetch, streaming JSON parse, distance filter
   dx_spots.*            DX JSON fetch plus Telnet connection and parsing
+  iss_tracker.*         SGP4 position/track from a fetched TLE, plus N2YO pass fetch
 ```
 
 ## Notes And Limits
