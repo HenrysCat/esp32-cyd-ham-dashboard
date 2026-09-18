@@ -14,10 +14,15 @@ enum DxSourceMode : uint8_t {
 // page, bit 0 being page 1; the static_assert in dashboard_display.cpp keeps
 // this in step with the number of pages the dashboard actually has.
 constexpr uint8_t kAutoPageMaskAll = 0xFF;
+constexpr uint8_t kMaxWifiNetworks = 5;
+
+struct WifiNetwork {
+  String ssid;
+  String password;
+};
 
 struct AppSettings {
-  String wifiSsid;
-  String wifiPassword;
+  WifiNetwork wifiNetworks[kMaxWifiNetworks];
   String callsign;
   String timezone;
   String timezoneLabel;

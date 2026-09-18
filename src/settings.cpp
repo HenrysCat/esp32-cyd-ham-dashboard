@@ -103,8 +103,17 @@ bool isValidMaidenheadLocator(const String& locator) {
 }
 
 void normalizeSettings(AppSettings& settings) {
-  settings.wifiSsid = limitedUntrimmedString(settings.wifiSsid, 64);
-  settings.wifiPassword = limitedUntrimmedString(settings.wifiPassword, 64);
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    settings.wifiNetworks[i].ssid =
+        limitedUntrimmedString(settings.wifiNetworks[i].ssid, 64);
+    settings.wifiNetworks[i].password =
+        limitedUntrimmedString(settings.wifiNetworks[i].password, 64);
+    // A password without a network is not useful and should not linger in
+    // preferences after the corresponding entry has been removed.
+    if (settings.wifiNetworks[i].ssid.length() == 0) {
+      settings.wifiNetworks[i].password = "";
+    }
+  }
   settings.callsign = limitedString(settings.callsign, 16);
   settings.callsign.toUpperCase();
   settings.timezone = limitedString(settings.timezone, 80);
@@ -180,12 +189,21 @@ void normalizeSettings(AppSettings& settings) {
 void settingsBegin() {
   preferences.begin(kNamespace, false);
 
-  currentSettings.wifiSsid = preferences.getString("ssid", "");
-  currentSettings.wifiPassword = preferences.getString("pass", "");
+  // wifi0* is the new multi-network format.  Fall back to the original
+  // ssid/pass keys so installed devices retain their configured network.
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    const String suffix = String(i);
+    currentSettings.wifiNetworks[i].ssid = preferences.getString(("wifi" + suffix + "s").c_str(), "");
+    currentSettings.wifiNetworks[i].password = preferences.getString(("wifi" + suffix + "p").c_str(), "");
+  }
+  if (currentSettings.wifiNetworks[0].ssid.length() == 0) {
+    currentSettings.wifiNetworks[0].ssid = preferences.getString("ssid", "");
+    currentSettings.wifiNetworks[0].password = preferences.getString("pass", "");
+  }
 
-  if (currentSettings.wifiSsid.length() == 0 && !isPlaceholderCredential(WIFI_SSID)) {
-    currentSettings.wifiSsid = WIFI_SSID;
-    currentSettings.wifiPassword = WIFI_PASSWORD;
+  if (currentSettings.wifiNetworks[0].ssid.length() == 0 && !isPlaceholderCredential(WIFI_SSID)) {
+    currentSettings.wifiNetworks[0].ssid = WIFI_SSID;
+    currentSettings.wifiNetworks[0].password = WIFI_PASSWORD;
   }
 
   currentSettings.timezone = readStringOrDefault("tz", kDefaultTimezone);
@@ -244,8 +262,11 @@ void saveSettings(const AppSettings& settings) {
   currentSettings = settings;
   normalizeSettings(currentSettings);
 
-  preferences.putString("ssid", currentSettings.wifiSsid);
-  preferences.putString("pass", currentSettings.wifiPassword);
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    const String suffix = String(i);
+    preferences.putString(("wifi" + suffix + "s").c_str(), currentSettings.wifiNetworks[i].ssid);
+    preferences.putString(("wifi" + suffix + "p").c_str(), currentSettings.wifiNetworks[i].password);
+  }
   preferences.putString("callsign", currentSettings.callsign);
   preferences.putBool("clock12", currentSettings.clock12Hour);
   preferences.putString("tz", currentSettings.timezone);
@@ -285,7 +306,12 @@ void saveSettings(const AppSettings& settings) {
 }
 
 bool hasWifiCredentials() {
-  return currentSettings.wifiSsid.length() > 0;
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    if (currentSettings.wifiNetworks[i].ssid.length() > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void factoryResetSettings() {

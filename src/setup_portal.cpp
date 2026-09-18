@@ -220,11 +220,31 @@ String pageHtml(const String& message = "") {
   html += F("<label for='callsign'>Callsign</label><input id='callsign' name='callsign' maxlength='16' value='");
   html += htmlEscape(settings.callsign);
   html += F("'><small>This callsign is also used to log in to a Telnet DX Cluster. If blank, <code>NOCALL</code> is used.</small>");
-  html += F("<label for='ssid'>Wi-Fi SSID</label><input id='ssid' name='ssid' value='");
-  html += htmlEscape(settings.wifiSsid);
-  html += F("' autocomplete='off'>");
-  html += F("<label for='pass'>Wi-Fi password</label><input id='pass' name='pass' type='password' value='' maxlength='64' autocomplete='new-password' placeholder='Leave blank to keep saved password'>");
-  html += F("<label><input name='clearpass' type='checkbox' value='1'>Clear the saved password (for an open network)</label>");
+  html += F("<h2>Saved Wi-Fi Networks</h2><small>Save up to five networks. The clock automatically joins any saved network that is in range. Leave a blank slot empty; clear an SSID to remove that saved network.</small>");
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    const String suffix = String(i);
+    html += F("<label for='ssid");
+    html += suffix;
+    html += F("'>Wi-Fi SSID ");
+    html += String(i + 1);
+    html += F("</label><input id='ssid");
+    html += suffix;
+    html += F("' name='ssid");
+    html += suffix;
+    html += F("' value='");
+    html += htmlEscape(settings.wifiNetworks[i].ssid);
+    html += F("' maxlength='64' autocomplete='off'>");
+    html += F("<label for='pass");
+    html += suffix;
+    html += F("'>Password</label><input id='pass");
+    html += suffix;
+    html += F("' name='pass");
+    html += suffix;
+    html += F("' type='password' value='' maxlength='64' autocomplete='new-password' placeholder='Leave blank to keep saved password'>");
+    html += F("<label><input name='clearpass");
+    html += suffix;
+    html += F("' type='checkbox' value='1'>Clear this password (for an open network)</label>");
+  }
   html += F("<label><input name='keepap' type='checkbox' value='1'");
   html += checked(settings.keepHotspotOn);
   html += F(">Keep the <code>");
@@ -442,12 +462,15 @@ void handleSave() {
   const AppSettings previousSettings = getSettings();
   AppSettings settings = previousSettings;
   settings.callsign = limitedArg("callsign", 16);
-  settings.wifiSsid = limitedArg("ssid", 64, false);
-  const String submittedPassword = limitedArg("pass", 64, false);
-  if (server.hasArg("clearpass")) {
-    settings.wifiPassword = "";
-  } else if (submittedPassword.length() > 0) {
-    settings.wifiPassword = submittedPassword;
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    const String suffix = String(i);
+    settings.wifiNetworks[i].ssid = limitedArg(("ssid" + suffix).c_str(), 64, false);
+    const String submittedPassword = limitedArg(("pass" + suffix).c_str(), 64, false);
+    if (server.hasArg("clearpass" + suffix)) {
+      settings.wifiNetworks[i].password = "";
+    } else if (submittedPassword.length() > 0) {
+      settings.wifiNetworks[i].password = submittedPassword;
+    }
   }
   settings.timezone = limitedArg("tz", 80);
   settings.timezoneLabel = limitedArg("tzlabel", 24);
@@ -514,8 +537,13 @@ void handleSave() {
   requestPskReporterRefresh();
   requestPotaSpotsRefresh();
 
-  if (settings.wifiSsid != previousSettings.wifiSsid ||
-      settings.wifiPassword != previousSettings.wifiPassword) {
+  bool wifiChanged = false;
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    wifiChanged |= settings.wifiNetworks[i].ssid != previousSettings.wifiNetworks[i].ssid ||
+                   settings.wifiNetworks[i].password != previousSettings.wifiNetworks[i].password;
+  }
+  if (wifiChanged) {
+    reloadWifiNetworks();
     pendingWifiReconnect = true;
     pendingWifiReconnectAtMs = millis() + 1500;
   }

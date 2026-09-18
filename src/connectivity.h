@@ -12,6 +12,8 @@ struct ClockSnapshot {
 
 void connectivityBegin();
 void connectivityLoop();
+// Reload the saved AP list after Wi-Fi settings have changed.
+void reloadWifiNetworks();
 void reconnectWifi();
 void applyTimezoneSettings();
 ClockSnapshot getClockSnapshot();

@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/772c46cd-7d77-45ed-b29a-c5d189fbcf8b
   - ISS Tracker: current position and ground track on the same world map, plus upcoming passes (optional; hidden until a free N2YO API key is set)
   - DX spots from JSON and/or a persistent Telnet DX Cluster connection
   - POTA activator spots, with an optional distance filter from your locator
-- Captive portal Wi-Fi setup, which automatically switches off a few seconds after the device confirms it has joined your Wi-Fi network (it can be switched back on from the web settings page if you need it again)
+- Captive portal Wi-Fi setup with up to five remembered networks; it automatically joins a saved network in range and switches off the hotspot a few seconds after connection (it can be switched back on from the web settings page if you need it again)
 - Local web settings page on the device IP
 - Hold the BOOT button on the back of the board for 5 seconds to factory reset all settings
 - Optional mDNS address: `http://cyd-ham.local/`
@@ -186,7 +186,7 @@ http://192.168.4.1
 The setup page lets you configure:
 
 - Callsign
-- Wi-Fi SSID and password
+- Up to five Wi-Fi SSID/password pairs; existing saved networks remain available when adding another one
 - Timezone preset, label, and POSIX timezone rule
 - Maidenhead locator
 - 12-hour or 24-hour local clock on the clock page
@@ -199,7 +199,7 @@ The setup page lets you configure:
 - Touch page navigation direction swap for differently wired touch controller variants
 
 Settings are saved to ESP32 Preferences and persist after reboot.
-The saved Wi-Fi password is never displayed in the settings page. Leave the password field blank to keep it, or use the checkbox to clear it for an open network.
+Saved Wi-Fi passwords are never displayed. Leave a password field blank to keep it, use its checkbox to clear it for an open network, or clear its SSID to remove that remembered network.
 
 ## Local Web Settings
 

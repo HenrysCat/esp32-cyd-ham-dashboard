@@ -1,6 +1,7 @@
 #include "connectivity.h"
 
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <time.h>
 
 #include "settings.h"
@@ -14,18 +15,33 @@ constexpr time_t kValidTimeThreshold = 1704067200; // 2024-01-01 00:00:00 UTC
 constexpr uint32_t kReconnectIntervalMs = 10000;
 
 uint32_t g_lastReconnectAttemptMs = 0;
+WiFiMulti* g_wifiMulti = nullptr;
 
 bool isTimeValid(time_t now) {
   return now >= kValidTimeThreshold;
 }
 
-void beginWifi() {
+void configureWifiNetworks() {
   const AppSettings& settings = getSettings();
+  // WiFiMulti keeps its own AP list. Recreate it when settings are saved so a
+  // changed password or a removed network takes effect without a reboot.
+  delete g_wifiMulti;
+  g_wifiMulti = new WiFiMulti();
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    const WifiNetwork& network = settings.wifiNetworks[i];
+    if (network.ssid.length() > 0) {
+      g_wifiMulti->addAP(network.ssid.c_str(), network.password.c_str());
+    }
+  }
+}
+
+void beginWifi() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
-  if (settings.wifiSsid.length() > 0) {
-    WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPassword.c_str());
+  configureWifiNetworks();
+  if (hasWifiCredentials()) {
+    g_wifiMulti->run();
   }
 }
 }
@@ -34,8 +50,11 @@ void connectivityBegin() {
   Serial.println();
   Serial.println("CYD HamClock phase 1 starting");
   const AppSettings& settings = getSettings();
-  Serial.print("Configured Wi-Fi SSID: ");
-  Serial.println(settings.wifiSsid.length() > 0 ? settings.wifiSsid : "(none)");
+  uint8_t networkCount = 0;
+  for (uint8_t i = 0; i < kMaxWifiNetworks; ++i) {
+    networkCount += settings.wifiNetworks[i].ssid.length() > 0;
+  }
+  Serial.printf("Configured Wi-Fi networks: %u\n", networkCount);
 
   beginWifi();
   configTzTime(settings.timezone.c_str(), kNtpServer1, kNtpServer2, kNtpServer3);
@@ -51,16 +70,17 @@ void connectivityLoop() {
   }
 }
 
+void reloadWifiNetworks() {
+  configureWifiNetworks();
+}
+
 void reconnectWifi() {
-  const AppSettings& settings = getSettings();
   // Mode is owned by setup_portal (it decides when the setup hotspot is on
   // or off), so only touch the STA side here and leave the mode alone.
-  WiFi.disconnect(false);
-  if (settings.wifiSsid.length() == 0) {
-    return;
+  if (hasWifiCredentials()) {
+    WiFi.disconnect(false);
+    g_wifiMulti->run();
   }
-
-  WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPassword.c_str());
 }
 
 void applyTimezoneSettings() {
