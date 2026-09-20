@@ -16,6 +16,9 @@ constexpr uint32_t kReconnectIntervalMs = 10000;
 
 uint32_t g_lastReconnectAttemptMs = 0;
 WiFiMulti* g_wifiMulti = nullptr;
+volatile bool g_wifiConnectInProgress = false;
+bool g_wifiNetworksReloadPending = false;
+bool g_wifiReconnectPending = false;
 
 bool isTimeValid(time_t now) {
   return now >= kValidTimeThreshold;
@@ -23,6 +26,7 @@ bool isTimeValid(time_t now) {
 
 void configureWifiNetworks() {
   const AppSettings& settings = getSettings();
+  // Connection candidates are read directly from settings after each scan.
   // WiFiMulti keeps its own AP list. Recreate it when settings are saved so a
   // changed password or a removed network takes effect without a reboot.
   delete g_wifiMulti;
@@ -35,13 +39,34 @@ void configureWifiNetworks() {
   }
 }
 
+void wifiConnectTask(void*) {
+  // WiFiMulti's scan/connect operation blocks for several seconds. Keeping it
+  // off the Arduino loop lets the display animate during startup while using
+  // the same proven network-selection logic.
+  g_wifiMulti->run();
+  g_wifiConnectInProgress = false;
+  vTaskDelete(nullptr);
+}
+
+void startWifiConnection() {
+  if (!hasWifiCredentials() || g_wifiConnectInProgress) {
+    return;
+  }
+
+  g_wifiConnectInProgress = true;
+  if (xTaskCreate(wifiConnectTask, "wifi-connect", 4096, nullptr, 1, nullptr) != pdPASS) {
+    g_wifiConnectInProgress = false;
+    Serial.println("Wi-Fi connection task failed to start");
+  }
+}
+
 void beginWifi() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   configureWifiNetworks();
   if (hasWifiCredentials()) {
-    g_wifiMulti->run();
+    startWifiConnection();
   }
 }
 }
@@ -62,6 +87,21 @@ void connectivityBegin() {
 
 void connectivityLoop() {
   const uint32_t nowMs = millis();
+  if (g_wifiConnectInProgress) {
+    return;
+  }
+
+  if (g_wifiNetworksReloadPending) {
+    configureWifiNetworks();
+    g_wifiNetworksReloadPending = false;
+  }
+
+  if (g_wifiReconnectPending) {
+    g_wifiReconnectPending = false;
+    reconnectWifi();
+    return;
+  }
+
   if (hasWifiCredentials() &&
       WiFi.status() != WL_CONNECTED &&
       nowMs - g_lastReconnectAttemptMs >= kReconnectIntervalMs) {
@@ -71,16 +111,29 @@ void connectivityLoop() {
 }
 
 void reloadWifiNetworks() {
-  configureWifiNetworks();
+  // WiFiMulti's AP list must not be replaced while its task is using it.
+  if (g_wifiConnectInProgress) {
+    g_wifiNetworksReloadPending = true;
+  } else {
+    configureWifiNetworks();
+  }
 }
 
 void reconnectWifi() {
   // Mode is owned by setup_portal (it decides when the setup hotspot is on
   // or off), so only touch the STA side here and leave the mode alone.
   if (hasWifiCredentials()) {
+    if (g_wifiConnectInProgress) {
+      g_wifiReconnectPending = true;
+      return;
+    }
     WiFi.disconnect(false);
-    g_wifiMulti->run();
+    startWifiConnection();
   }
+}
+
+bool wifiConnectionInProgress() {
+  return g_wifiConnectInProgress;
 }
 
 void applyTimezoneSettings() {

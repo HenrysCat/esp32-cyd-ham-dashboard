@@ -19,4 +19,5 @@ uint8_t getCurrentDashboardPageNumber();
 // between the day and night settings.
 uint8_t getAppliedBrightnessPercent();
 void displayShowMessage(const String& title, const String& subtitle);
+void displayShowWifiSearching(uint8_t spinnerFrame);
 void requestDisplayRedraw();

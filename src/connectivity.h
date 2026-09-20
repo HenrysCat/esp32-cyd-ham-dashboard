@@ -12,6 +12,7 @@ struct ClockSnapshot {
 
 void connectivityBegin();
 void connectivityLoop();
+bool wifiConnectionInProgress();
 // Reload the saved AP list after Wi-Fi settings have changed.
 void reloadWifiNetworks();
 void reconnectWifi();

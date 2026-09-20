@@ -2766,6 +2766,24 @@ void displayShowMessage(const String& title, const String& subtitle) {
   drawCentered(subtitle, 132, 2, kMuted);
 }
 
+void displayShowWifiSearching(uint8_t spinnerFrame) {
+  static constexpr char kSpinnerFrames[] = {'/', '-', '\\', '|'};
+
+  // The startup state prevents dashboard drawing until this screen is handed
+  // off, so only the first frame needs to paint the complete screen.
+  if (spinnerFrame == 0) {
+    tft.fillScreen(kBg);
+    drawCentered("Searching for Wi-Fi", 96, 4, kAccent);
+    drawCentered("Connecting to a saved network", 132, 2, kMuted);
+  }
+
+  const int16_t spinnerX = tft.width() / 2 - 12;
+  tft.fillRect(spinnerX, 160, 24, 24, kBg);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(kAccent, kBg);
+  tft.drawChar(kSpinnerFrames[spinnerFrame % 4], tft.width() / 2, 172, 4);
+}
+
 void requestDisplayRedraw() {
   clearPageState();
   g_pageDirty = true;
