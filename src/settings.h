@@ -29,6 +29,9 @@ struct AppSettings {
   String locator;
   // Show the page 1 local clock as 12-hour with AM/PM rather than 24-hour.
   bool clock12Hour;
+  // Swaps which of UTC/local time gets the large readout on page 1, and
+  // shows local time instead of UTC in the bottom bar on other pages.
+  bool swapUtcLocal;
   bool useJsonPropagationProxy;
   String propagationJsonUrl;
   DxSourceMode dxSourceMode;

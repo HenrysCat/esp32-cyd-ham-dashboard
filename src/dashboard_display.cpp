@@ -626,14 +626,22 @@ String pageIndicator() {
   return String("Page ") + String(activePosition) + "/" + String(activeTotal);
 }
 
+// Shows UTC by default; when settings.swapUtcLocal is on, shows local time
+// instead, to match the swap applied to the big readout on the clock page.
 String footerUtcText(const ClockSnapshot& snapshot) {
+  const bool swapped = getSettings().swapUtcLocal;
   if (!snapshot.timeValid) {
-    return "UTC --:--";
+    return swapped ? "LOC --:--" : "UTC --:--";
   }
-  tm utcTime;
-  gmtime_r(&snapshot.epoch, &utcTime);
+  tm displayTime;
   char buffer[16];
-  strftime(buffer, sizeof(buffer), "UTC %H:%M", &utcTime);
+  if (swapped) {
+    localtime_r(&snapshot.epoch, &displayTime);
+    strftime(buffer, sizeof(buffer), "LOC %H:%M", &displayTime);
+  } else {
+    gmtime_r(&snapshot.epoch, &displayTime);
+    strftime(buffer, sizeof(buffer), "UTC %H:%M", &displayTime);
+  }
   return String(buffer);
 }
 
@@ -2024,14 +2032,24 @@ void drawClockPage(const ClockSnapshot& snapshot) {
   const AppSettings& settings = getSettings();
   formatTimes(snapshot, settings.clock12Hour);
 
+  // Swapping just changes which buffer/label lands in the big top slot versus
+  // the smaller split field below; the buffers themselves always hold what
+  // formatTimes put in them (UTC fixed at 24-hour, local following the
+  // 12/24-hour setting) regardless of where they end up on screen.
+  const bool swapped = settings.swapUtcLocal;
+  const String topLabel = swapped ? settings.timezoneLabel : String("UTC");
+  const char* topBuffer = swapped ? localBuffer : utcBuffer;
+  const String bottomLabel = swapped ? String("UTC") : settings.timezoneLabel;
+  const char* bottomBuffer = swapped ? utcBuffer : localBuffer;
+
   if (g_pageDirty) {
     tft.fillScreen(kBg);
-    drawCentered("UTC", kClockLabelY, 2, kMuted);
+    drawCentered(topLabel, kClockLabelY, 2, kMuted);
   }
 
-  drawCenteredField(g_lastUtc, utcBuffer, kClockUtcY, kClockUtcFont, kAccent, -1, -1,
+  drawCenteredField(g_lastUtc, topBuffer, kClockUtcY, kClockUtcFont, kAccent, -1, -1,
                     kClockUtcSize);
-  drawSplitField(g_lastLocal, settings.timezoneLabel, localBuffer, kClockLocalY, 4, kText, 1,
+  drawSplitField(g_lastLocal, bottomLabel, bottomBuffer, kClockLocalY, 4, kText, 1,
                  kClockTextFont);
   drawCenteredField(g_lastDate, dateBuffer, kClockDateY, 4, kText, -1, -1, 1, kClockTextFont);
   const String stationText = settings.callsign.length() > 0

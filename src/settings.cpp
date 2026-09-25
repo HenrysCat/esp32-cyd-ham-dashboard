@@ -211,6 +211,7 @@ void settingsBegin() {
   currentSettings.locator = readStringOrDefault("locator", MAIDENHEAD_LOCATOR);
   currentSettings.callsign = preferences.getString("callsign", "");
   currentSettings.clock12Hour = preferences.getBool("clock12", false);
+  currentSettings.swapUtcLocal = preferences.getBool("swaputc", false);
   currentSettings.useJsonPropagationProxy = preferences.getBool("propjson", false);
   currentSettings.propagationJsonUrl = readStringOrDefault("propurl", PROPAGATION_JSON_URL);
   currentSettings.dxSourceMode = static_cast<DxSourceMode>(
@@ -269,6 +270,7 @@ void saveSettings(const AppSettings& settings) {
   }
   preferences.putString("callsign", currentSettings.callsign);
   preferences.putBool("clock12", currentSettings.clock12Hour);
+  preferences.putBool("swaputc", currentSettings.swapUtcLocal);
   preferences.putString("tz", currentSettings.timezone);
   preferences.putString("tzlabel", currentSettings.timezoneLabel);
   preferences.putString("locator", currentSettings.locator);

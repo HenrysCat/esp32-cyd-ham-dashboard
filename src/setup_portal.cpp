@@ -284,6 +284,9 @@ String pageHtml(const String& message = "") {
   html += F("<label><input name='clock12' type='checkbox' value='1'");
   html += checked(settings.clock12Hour);
   html += F(">Show the local clock as 12-hour with AM/PM</label><small>Applies to the local time on the clock page. The UTC readout above it stays 24-hour.</small>");
+  html += F("<label><input name='swaputc' type='checkbox' value='1'");
+  html += checked(settings.swapUtcLocal);
+  html += F(">Swap UTC and local time round</label><small>Shows local time as the large readout on the clock page (with UTC below), and shows local time instead of UTC in the bottom bar on other pages.</small>");
   html += F("</div><div class='card'><h2>Data Sources</h2>");
   html += F("<label for='propmode'>Propagation source mode</label><select id='propmode' name='propmode'>");
   html += F("<option value='direct'");
@@ -476,6 +479,7 @@ void handleSave() {
   settings.timezoneLabel = limitedArg("tzlabel", 24);
   settings.locator = limitedArg("locator", 6);
   settings.clock12Hour = server.hasArg("clock12");
+  settings.swapUtcLocal = server.hasArg("swaputc");
   settings.useJsonPropagationProxy = server.arg("propmode") == "json";
   settings.propagationJsonUrl = limitedArg("propurl", 180);
   const String dxMode = server.arg("dxmode");
